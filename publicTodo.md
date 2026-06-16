@@ -8,6 +8,11 @@
 - [ ] Set up environment variables and secrets management
 - [ ] Write project conventions doc (branch naming, commit style)
 
+## Design Decisions
+
+- [x] Add framework choice (Astro over Next.js) to considerations.md
+- [ ] Document future stack/framework decisions in considerations.md as they arise
+
 ## Data Pipeline
 
 - [ ] Set up GitHub API client (auth, rate limiting, pagination)

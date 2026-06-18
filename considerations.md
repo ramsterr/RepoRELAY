@@ -1,10 +1,12 @@
-- Frontend framework decision 
+- Frontend framework decision
+- 
 -astrojs vs next js , rn im using astrojs with a serving api for simplicity
 
 -https://machinelearningatscale.substack.com/p/embedding-features-in-weights-to?r=jeeym&triedRedirect=true 
 read this about optimized two tower model
 
 - sadly have to add outh , wanted to keep it without login :(
+- 
 -imp: if i dont make it login based (no outh ) then i would have to start over again for each person using it
 at start i would genrally prefer using content based filtering (cosine similarity)
 

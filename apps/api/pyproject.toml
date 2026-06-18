@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 
 dependencies = [
     "reporelay-core",
+    "reporelay-engine",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.8.0",

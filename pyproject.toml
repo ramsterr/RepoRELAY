@@ -10,12 +10,14 @@ members = [
     "apps/api",
     "packages/core",
     "packages/ingest",
+    "packages/engine",
 ]
 
 [tool.uv.sources]
 reporelay-core = { workspace = true }
 reporelay-api = { workspace = true }
 reporelay-ingest = { workspace = true }
+reporelay-engine = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -35,7 +37,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TID"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["reporelay_api", "reporelay_core", "reporelay_ingest"]
+known-first-party = ["reporelay_api", "reporelay_core", "reporelay_ingest", "reporelay_engine"]
 
 [tool.mypy]
 python_version = "3.12"

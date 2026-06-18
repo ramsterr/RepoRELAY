@@ -49,3 +49,10 @@ do you think this threshold should be dynamic or static ? , like lets say a user
 similarly for the item based collaborative filtering , do i increase the threshold or decrease the threshold if the user reacts well to the suggestions
 
 (for suggestions i can use a strict thumbs up and thumbs down before making the user see his next preference)
+
+
+
+- HALF DIVISION (beta)
+
+keep half of the recommendations userbased and the other half as iterm based
+

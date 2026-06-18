@@ -1,12 +1,12 @@
-- Frontend framework decision
-- 
+- ##Frontend framework decision
+  
 -astrojs vs next js , rn im using astrojs with a serving api for simplicity
 
 -https://machinelearningatscale.substack.com/p/embedding-features-in-weights-to?r=jeeym&triedRedirect=true 
 read this about optimized two tower model
 
-- sadly have to add outh , wanted to keep it without login :(
-- 
+- ##sadly have to add outh , wanted to keep it without login :(
+  
 -imp: if i dont make it login based (no outh ) then i would have to start over again for each person using it
 at start i would genrally prefer using content based filtering (cosine similarity)
 
@@ -16,7 +16,7 @@ cuz i would have to start with simple cosine similarity from cold-start.
 this wont be favourable , so consider having an outh , i get it that astrojs will need a bit more for this unlike next js but yeah
 
 
-- USER VS ITEM based CBF
+- ##USER VS ITEM based CBF
 
 
 <img width="932" height="1412" alt="image" src="https://github.com/user-attachments/assets/c7e8e0b8-e8a6-40fb-9dab-f87e9d613120" />
@@ -52,7 +52,7 @@ similarly for the item based collaborative filtering , do i increase the thresho
 
 
 
-- HALF DIVISION (beta)
+- ##HALF DIVISION (beta)
 
 keep half of the recommendations userbased and the other half as iterm based
 

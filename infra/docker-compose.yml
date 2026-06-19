@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: reporelay
       POSTGRES_DB: reporelay
     ports:
-      - "5432:5432"
+      - "5439:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-extensions.sql:ro

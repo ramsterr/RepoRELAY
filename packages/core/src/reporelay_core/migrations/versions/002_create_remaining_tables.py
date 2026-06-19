@@ -46,11 +46,12 @@ def upgrade() -> None:
         "readme_texts",
         sa.Column("repo_id", sa.BigInteger(), nullable=False, unique=True),
         sa.Column("raw_text", sa.Text(), nullable=True),
-        sa.Column("embedding", sa.NullType(), nullable=True),
         sa.Column("embedded_at", sa.DateTime(timezone=True), nullable=True),
     )
+    op.execute(
+        "ALTER TABLE readme_texts ADD COLUMN embedding vector(768)"
+    )
     op.create_foreign_key("fk_readme_texts_repo", "readme_texts", "repos", ["repo_id"], ["id"])
-    op.create_index("ix_readme_texts_embedding", "readme_texts", ["embedding"], postgresql_using="hnsw", postgresql_with={"m": 16, "ef_construction": 200}, postgresql_ops={"embedding": "vector_cosine_ops"})
 
     op.execute(
         """
@@ -171,17 +172,9 @@ def _create_star_partitions(from_year: int, from_month: int, to_year: int, to_mo
             next_month = 1
             next_year += 1
         op.execute(
-            sa.text(
-                f"""
-                CREATE TABLE IF NOT EXISTS {name}
-                PARTITION OF star_events
-                FOR VALUES FROM
-                    (:from_start) TO (:to_start)
-                """
-            ).bindparams(
-                from_start=f"{year}-{month:02d}-01",
-                to_start=f"{next_year}-{next_month:02d}-01",
-            )
+            f"CREATE TABLE IF NOT EXISTS {name} "
+            f"PARTITION OF star_events "
+            f"FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_year}-{next_month:02d}-01')"
         )
         month = next_month
         year = next_year
@@ -191,7 +184,7 @@ def _drop_star_partitions(from_year: int, from_month: int, to_year: int, to_mont
     year, month = from_year, from_month
     while (year, month) <= (to_year, to_month):
         name = _star_partition_name(year, month)
-        op.execute(sa.text(f"DROP TABLE IF EXISTS {name}"))
+        op.execute(f"DROP TABLE IF EXISTS {name}")
         month += 1
         if month > 12:
             month = 1

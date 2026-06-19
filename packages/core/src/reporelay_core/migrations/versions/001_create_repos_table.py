@@ -35,7 +35,7 @@ def upgrade() -> None:
         sa.Column("archived", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("is_template", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("default_branch", sa.String(255), nullable=True),
-        sa.Column("raw_metadata", sa.JSONB(), nullable=True),
+        sa.Column("raw_metadata", sa.JSON(), nullable=True),
     )
 
     op.create_index("ix_repos_language", "repos", ["language"])

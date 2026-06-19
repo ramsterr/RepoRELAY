@@ -10,7 +10,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = "postgresql+psycopg://reporelay:reporelay@localhost:5432/reporelay"
+    database_url: str = "postgresql+psycopg://reporelay:reporelay@localhost:5439/reporelay"
     redis_url: str = "redis://localhost:6379/0"
     github_token: str = ""
 

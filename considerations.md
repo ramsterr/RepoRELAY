@@ -80,3 +80,14 @@ GitHub Archive	Every public event on GitHub since 2011 (star, fork, push, PR, is
 Libraries.io	Dependency data across NPM, PyPI, Cargo, Maven, Go, NuGet   -	Free API
 
 GH Archive + GHTorrent	Raw event firehose, academic dataset   -	Free
+
+
+## Data ovrerview
+
+collect eevrything but try to focus on things like starts , dependencies , contributors (jaccard) , dependencies .
+
+but donot focus on  watch count , issue count , PR count etc
+
+
+## hot cold variant IN DATABASE management
+use a redis layer , keep the more important things like stars , dependencies etc etc in it

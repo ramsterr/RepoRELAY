@@ -23,17 +23,17 @@ Ordered sequence. Each task is small enough to complete in one session.
 
 ## Phase 2: Indexing (speed)
 
-- [ ] `02.01` Add B-tree index on `repos(language)`
-- [ ] `02.02` Add GIN index on `repos(topics)`
-- [ ] `02.03` Add B-tree index on `repos(stars DESC)`
-- [ ] `02.04` Add composite index on `star_events(user_id, repo_id)`
-- [ ] `02.05` Add composite index on `star_events(repo_id, starred_at DESC)`
-- [ ] `02.06` Add partial index on `star_events` WHERE `starred_at > now() - interval '2 years'`
-- [ ] `02.07` Add composite index on `contributor_edges(repo_id, user_id)`
-- [ ] `02.08` Add index on `dependency_edges(repo_id, dependency_name)`
-- [ ] `02.09` Add composite index on `two_hop_neighbors(source_repo_id, weight DESC)`
-- [ ] `02.10` Create HNSW index on `readme_texts(embedding vector_cosine_ops)` with `m=16, ef_construction=200`
-- [ ] `02.11` Run `EXPLAIN ANALYZE` on the top 5 queries from the data design doc — verify index usage
+- [x] `02.01` Add B-tree index on `repos(language)`
+- [x] `02.02` Add GIN index on `repos(topics)`
+- [x] `02.03` Add B-tree index on `repos(stars DESC)`
+- [x] `02.04` Add composite index on `star_events(user_id, repo_id)`
+- [x] `02.05` Add composite index on `star_events(repo_id, starred_at DESC)`
+- [x] `02.06` Add partial index on `star_events` WHERE `starred_at > now() - interval '2 years'`
+- [x] `02.07` Add composite index on `contributor_edges(repo_id, user_id)`
+- [x] `02.08` Add index on `dependency_edges(repo_id, dependency_name)`
+- [x] `02.09` Add composite index on `two_hop_neighbors(source_repo_id, weight DESC)`
+- [x] `02.10` Create HNSW index on `readme_texts(embedding vector_cosine_ops)` with `m=16, ef_construction=200`
+- [x] `02.11` Run `EXPLAIN ANALYZE` on the top 5 queries from the data design doc — verify index usage
 
 ## Phase 3: Ingest — Single Repo (GitHub API)
 

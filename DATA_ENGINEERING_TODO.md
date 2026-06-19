@@ -6,20 +6,20 @@ Ordered sequence. Each task is small enough to complete in one session.
 
 ## Phase 1: Schema Foundation (DDL)
 
-- [ ] `01.01` Create Alembic migrations directory in `packages/core/src/reporelay_core/migrations/`
-- [ ] `01.02` Write `CREATE TABLE repos` DDL (id, full_name, description, language, license, stars, forks, topics, created_at, updated_at, pushed_at, archived, is_template)
-- [ ] `01.03` Write `CREATE TABLE users` DDL (id, login, type, created_at)
-- [ ] `01.04` Write `CREATE TABLE topics` DDL (name, display_name)
-- [ ] `01.05` Write `CREATE TABLE languages` DDL (name)
-- [ ] `01.06` Write `CREATE TABLE readme_texts` DDL (repo_id FK, raw_text, embedding vector(768), embedded_at)
-- [ ] `01.07` Write `CREATE TABLE star_events` DDL partitioned by month (user_id, repo_id, starred_at)
-- [ ] `01.08` Write `CREATE TABLE fork_events` DDL (user_id, repo_id, forked_at)
-- [ ] `01.09` Write `CREATE TABLE contributor_edges` DDL (user_id, repo_id, commit_count, first_at, last_at)
-- [ ] `01.10` Write `CREATE TABLE dependency_edges` DDL (repo_id, dependency_name, ecosystem, version, is_dev)
-- [ ] `01.11` Write `CREATE TABLE workflow_cooccurrence` DDL (repo_a, repo_b, count)
-- [ ] `01.12` Write `CREATE TABLE user_blend_states` DDL (user_id, weights JSONB, stage, total_interactions)
-- [ ] `01.13` Write `CREATE TABLE two_hop_neighbors` DDL (source_repo_id, neighbor_repo_id, path_type, weight)
-- [ ] `01.14` Run `alembic upgrade head` — verify all tables exist in Postgres
+- [x] `01.01` Create Alembic migrations directory in `packages/core/src/reporelay_core/migrations/`
+- [x] `01.02` Write `CREATE TABLE repos` DDL (id, full_name, description, language, license, stars, forks, topics, created_at, updated_at, pushed_at, archived, is_template)
+- [x] `01.03` Write `CREATE TABLE users` DDL (id, login, type, created_at)
+- [x] `01.04` Write `CREATE TABLE topics` DDL (name, display_name)
+- [x] `01.05` Write `CREATE TABLE languages` DDL (name)
+- [x] `01.06` Write `CREATE TABLE readme_texts` DDL (repo_id FK, raw_text, embedding vector(768), embedded_at)
+- [x] `01.07` Write `CREATE TABLE star_events` DDL partitioned by month (user_id, repo_id, starred_at)
+- [x] `01.08` Write `CREATE TABLE fork_events` DDL (user_id, repo_id, forked_at)
+- [x] `01.09` Write `CREATE TABLE contributor_edges` DDL (user_id, repo_id, commit_count, first_at, last_at)
+- [x] `01.10` Write `CREATE TABLE dependency_edges` DDL (repo_id, dependency_name, ecosystem, version, is_dev)
+- [x] `01.11` Write `CREATE TABLE workflow_cooccurrence` DDL (repo_a, repo_b, count)
+- [x] `01.12` Write `CREATE TABLE user_blend_states` DDL (user_id, weights JSONB, stage, total_interactions)
+- [x] `01.13` Write `CREATE TABLE two_hop_neighbors` DDL (source_repo_id, neighbor_repo_id, path_type, weight)
+- [x] `01.14` Run `alembic upgrade head` — verify all tables exist in Postgres *pending Docker*
 
 ## Phase 2: Indexing (speed)
 

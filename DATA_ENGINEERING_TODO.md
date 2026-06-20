@@ -37,17 +37,17 @@ Ordered sequence. Each task is small enough to complete in one session.
 
 ## Phase 3: Ingest — Single Repo (GitHub API)
 
-- [ ] `03.01` Extend GitHubClient with `get_topics(owner, name)` — fetch topic list
-- [ ] `03.02` Extend GitHubClient with `get_contributors(owner, name)` — fetch top 100 contributors
-- [ ] `03.03` Extend GitHubClient with `get_languages(owner, name)` — fetch language breakdown
-- [ ] `03.04` Extend GitHubClient with pagination helper (`get_all_pages`) for list endpoints
-- [ ] `03.05` Create `ingest save-repo owner name` CLI command — fetches repo, README, topics, languages, contributors
-- [ ] `03.06` Write `upsert_repo()` function — INSERT INTO repos ON CONFLICT UPDATE
-- [ ] `03.07` Write `upsert_readme()` function — INSERT into readme_texts
-- [ ] `03.08` Write `insert_topics()` function — INSERT INTO topics, link to repo
-- [ ] `03.09` Write `insert_contributors()` function — INSERT INTO contributor_edges
-- [ ] `03.10` Run `just ingest save-repo vercel next.js` — verify 1 row in repos, 1 row in readme_texts
-- [ ] `03.11` Run `just psql` → `SELECT full_name, stars, language FROM repos;` — verify data
+- [x] `03.01` Extend GitHubClient with `get_topics(owner, name)` — fetch topic list
+- [x] `03.02` Extend GitHubClient with `get_contributors(owner, name)` — fetch top 100 contributors
+- [x] `03.03` Extend GitHubClient with `get_languages(owner, name)` — fetch language breakdown
+- [x] `03.04` Extend GitHubClient with pagination helper (`get_all_pages`) for list endpoints
+- [x] `03.05` Create `ingest save-repo owner name` CLI command — fetches repo, README, topics, languages, contributors
+- [x] `03.06` Write `upsert_repo()` function — INSERT INTO repos ON CONFLICT UPDATE
+- [x] `03.07` Write `upsert_readme()` function — INSERT into readme_texts
+- [x] `03.08` Write `insert_topics()` function — INSERT INTO topics, link to repo
+- [x] `03.09` Write `insert_contributors()` function — INSERT INTO contributor_edges
+- [x] `03.10` Run `just ingest save-repo vercel next.js` — verify 1 row in repos, 1 row in readme_texts
+- [x] `03.11` Run `just psql` → `SELECT full_name, stars, language FROM repos;` — verify data
 
 ## Phase 4: Seed Ingest — Batch
 

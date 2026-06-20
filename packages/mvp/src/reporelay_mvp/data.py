@@ -7,9 +7,8 @@ no co-star counts, no materialized views.
 
 from __future__ import annotations
 
-from typing import Any
-
 import json
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -18,11 +18,39 @@ from typing import Any
 
 from reporelay_mvp import data
 from reporelay_mvp.candidates import generate_candidates
-from reporelay_mvp.models import Recommendation
+from reporelay_mvp.features import compute_features
+from reporelay_mvp.models import ScoredRecommendation, ScoredRepo
 from reporelay_mvp.rerank import rerank
 from reporelay_mvp.score import score_many
 
 logger = logging.getLogger(__name__)
+
+
+def _build_scored_repo(
+    source: Any,
+    repo: Any,
+    score: float,
+    cosine_sim: float,
+) -> ScoredRepo:
+    features = compute_features(source, repo, cosine_sim=cosine_sim)
+    source_topic_set = set(source.topics)
+    source_lang = source.language
+
+    return ScoredRepo(
+        id=repo.id,
+        owner=repo.owner,
+        name=repo.name,
+        full_name=repo.full_name,
+        description=repo.description,
+        language=repo.language,
+        topics=repo.topics,
+        stars=repo.stars,
+        dependencies=repo.dependencies,
+        score=round(score, 4),
+        features=features.as_dict(),
+        shared_topics=sorted(source_topic_set & set(repo.topics)),
+        shared_language=bool(source_lang and repo.language and source_lang == repo.language),
+    )
 
 
 async def recommend(
@@ -30,7 +58,7 @@ async def recommend(
     *,
     limit: int = 10,
     seed: int | None = None,
-) -> Recommendation:
+) -> ScoredRecommendation:
     if limit <= 0:
         raise ValueError("limit must be > 0")
 
@@ -51,7 +79,13 @@ async def recommend(
 
         scored = score_many(source, candidates, seed=seed)
         final = rerank(source, scored, limit=limit)
-        return Recommendation(source_repo=full_name, repos=final)
+
+        scored_repos: list[ScoredRepo] = []
+        for repo, sc in final:
+            cosine_sim = _find_cosine(repo, candidates)
+            scored_repos.append(_build_scored_repo(source, repo, sc, cosine_sim))
+
+        return ScoredRecommendation(source_repo=full_name, repos=scored_repos)
     finally:
         await session.close()
 
@@ -60,7 +94,7 @@ async def recommend_random(
     *,
     seed: int,
     limit: int = 10,
-) -> Recommendation:
+) -> ScoredRecommendation:
     if limit <= 0:
         raise ValueError("limit must be > 0")
 
@@ -81,9 +115,22 @@ async def recommend_random(
 
         scored = score_many(source, candidates, seed=seed)
         final = rerank(source, scored, limit=limit)
-        return Recommendation(source_repo=source.full_name, repos=final)
+
+        scored_repos: list[ScoredRepo] = []
+        for repo, sc in final:
+            cosine_sim = _find_cosine(repo, candidates)
+            scored_repos.append(_build_scored_repo(source, repo, sc, cosine_sim))
+
+        return ScoredRecommendation(source_repo=source.full_name, repos=scored_repos)
     finally:
         await session.close()
+
+
+def _find_cosine(repo: Any, candidates: list[tuple[Any, float]]) -> float:
+    for cand, sim in candidates:
+        if cand.id == repo.id:
+            return sim
+    return 0.5
 
 
 async def recommend_dict(

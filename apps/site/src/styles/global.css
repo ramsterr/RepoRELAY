@@ -199,6 +199,14 @@ button {
   font-family: var(--font-mono);
   font-size: 0.9rem;
   font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.card-repo:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .card-desc {

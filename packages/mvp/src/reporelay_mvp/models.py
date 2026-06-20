@@ -30,6 +30,27 @@ class Recommendation(BaseModel):
     repos: list[Repo]
 
 
+class ScoredRepo(BaseModel):
+    id: int
+    owner: str
+    name: str
+    full_name: str
+    description: str | None = None
+    language: str | None = None
+    topics: list[str] = Field(default_factory=list)
+    stars: int = 0
+    dependencies: list[str] = Field(default_factory=list)
+    score: float = 0.0
+    features: dict[str, float] = Field(default_factory=dict)
+    shared_topics: list[str] = Field(default_factory=list)
+    shared_language: bool = False
+
+
+class ScoredRecommendation(BaseModel):
+    source_repo: str
+    repos: list[ScoredRepo]
+
+
 @dataclass
 class Features:
     language_match: float

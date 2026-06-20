@@ -22,14 +22,14 @@ def rerank(
     scored: list[tuple[Repo, float]],
     *,
     limit: int = 10,
-) -> list[Repo]:
+) -> list[tuple[Repo, float]]:
     source_owner = source.owner.lower()
     seen_owners: set[str] = set()
-    out: list[Repo] = []
+    out: list[tuple[Repo, float]] = []
 
     sorted_scored = sorted(scored, key=lambda pair: pair[1], reverse=True)
 
-    for repo, _score in sorted_scored:
+    for repo, score in sorted_scored:
         if repo.id == source.id:
             continue
 
@@ -41,7 +41,7 @@ def rerank(
             continue
 
         seen_owners.add(owner)
-        out.append(repo)
+        out.append((repo, score))
 
         if len(out) >= limit:
             break

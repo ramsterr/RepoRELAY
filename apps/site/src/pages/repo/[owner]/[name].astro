@@ -7,14 +7,37 @@ import {
 
 const { owner, name } = Astro.params;
 const repo = `${owner}/${name}`;
+const seedParam = Astro.url.searchParams.get("seed");
+const seed = seedParam ? parseInt(seedParam) : undefined;
 
 let data: RecommendResponse | null = null;
 let error: string | null = null;
 
 try {
-  data = await fetchRecommendations(repo, 12);
+  data = await fetchRecommendations(repo, 12, seed);
 } catch (e) {
   error = e instanceof Error ? e.message : "failed to load";
+}
+
+function fmt(n: number): string {
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  return String(n);
+}
+
+function scoreColor(score: number): string {
+  if (score >= 0.7) return "high";
+  if (score >= 0.4) return "medium";
+  return "low";
+}
+
+function matchLabel(features: Record<string, number>): string {
+  const parts: string[] = [];
+  if (features.language_match >= 1) parts.push("same language");
+  if (features.topic_overlap > 0.3) parts.push("shared topics");
+  if (features.cosine_sim > 0.6) parts.push("similar README");
+  if (features.dep_overlap > 0.3) parts.push("shared deps");
+  if (parts.length === 0) return "loose match";
+  return parts.slice(0, 2).join(" + ");
 }
 ---
 
@@ -26,39 +49,68 @@ try {
 
   {
     error ? (
-      <div class="error">{error}</div>
+      <div class="error">
+        {error}
+        <br />
+        <small>make sure the API is running on port 8001</small>
+      </div>
     ) : (
       <>
         <p class="section-label">
           {data?.repos.length ?? 0} recommendations
+          {seed !== undefined && <span style="opacity:0.5"> (seed: {seed})</span>}
         </p>
 
         <div class="actions">
-          <button class="btn btn-outline" onclick="reroll()">
+          <button class="btn btn-outline" id="reroll-btn">
             rerun with new seed
           </button>
-          <a href={`/repo/${repo}?seed=${Date.now()}`} class="btn btn-outline" style="display:inline-block">
+          <button class="btn btn-outline" id="diff-btn">
             different results
-          </a>
+          </button>
         </div>
 
         <div id="results">
-          {data?.repos.map((r, i) => (
+          {data?.repos.map((r) => (
             <div class="card">
               <div class="card-top">
-                <span class="card-repo">{r.full_name}</span>
-                <span class="stars">{r.stars.toLocaleString()} ★</span>
+                <a
+                  class="card-repo"
+                  href={`https://github.com/${r.full_name}`}
+                  target="_blank"
+                  rel="noopener"
+                >
+                  {r.full_name}
+                </a>
+                <span class="stars">{fmt(r.stars)} ★</span>
               </div>
               <div class="card-desc">
                 {r.description || "(no description)"}
               </div>
               <div class="card-meta">
-                {r.language && (
+                <span class={`score-dot ${scoreColor(r.score)}`} />
+                <span class="badge badge-lang" style="font-size:0.65rem;">
+                  {matchLabel(r.features)}
+                </span>
+                {r.shared_language && (
+                  <span class="badge badge-lang" style="background:#e8f5e9;border-color:#c8e6c9;color:#2e7d32;">
+                    {r.language}
+                  </span>
+                )}
+                {r.shared_topics.length > 0 && (
+                  <span class="badge" style="background:#e3f2fd;border-color:#bbdefb;color:#1565c0;">
+                    {r.shared_topics.join(", ")}
+                  </span>
+                )}
+                {r.language && !r.shared_language && (
                   <span class="badge badge-lang">{r.language}</span>
                 )}
-                {r.topics.slice(0, 4).map((t) => (
-                  <span class="pill">{t}</span>
-                ))}
+                {r.topics
+                  .filter((t) => !r.shared_topics.includes(t))
+                  .slice(0, 3)
+                  .map((t) => (
+                    <span class="pill">{t}</span>
+                  ))}
               </div>
             </div>
           ))}
@@ -69,43 +121,13 @@ try {
 </Base>
 
 <script is:inline>
-  const API = "http://localhost:8001";
+  document.getElementById("reroll-btn")?.addEventListener("click", function () {
+    var seed = Math.floor(Math.random() * 99999);
+    window.location.href = window.location.pathname + "?seed=" + seed;
+  });
 
-  function reroll() {
-    const seed = Math.floor(Math.random() * 99999);
-    window.location.href = `${window.location.pathname}?seed=${seed}`;
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  const seed = params.get("seed");
-  if (seed) {
-    const repo = window.location.pathname.replace("/repo/", "");
-    const results = document.getElementById("results");
-    if (results) {
-      results.innerHTML = '<div class="loading">fetching fresh…</div>';
-      fetch(`${API}/recommend?repo=${repo}&limit=12&seed=${seed}`)
-        .then((res) => res.json())
-        .then((data) => {
-          results.innerHTML = data.repos
-            .map(
-              (r) => `
-            <div class="card">
-              <div class="card-top">
-                <span class="card-repo">${r.full_name}</span>
-                <span class="stars">${r.stars.toLocaleString()} ★</span>
-              </div>
-              <div class="card-desc">${r.description || "(no description)"}</div>
-              <div class="card-meta">
-                ${r.language ? `<span class="badge badge-lang">${r.language}</span>` : ""}
-                ${r.topics.slice(0, 4).map((t) => `<span class="pill">${t}</span>`).join("")}
-              </div>
-            </div>`
-            )
-            .join("");
-        })
-        .catch((e) => {
-          results.innerHTML = `<div class="error">${e.message}</div>`;
-        });
-    }
-  }
+  document.getElementById("diff-btn")?.addEventListener("click", function () {
+    var seed = Math.floor(Math.random() * 99999);
+    window.location.href = window.location.pathname + "?seed=" + seed;
+  });
 </script>

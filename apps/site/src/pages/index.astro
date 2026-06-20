@@ -19,32 +19,46 @@ const examples = [
     built with a 5-stage recommender — pure Postgres + pgvector, no ML training
   </p>
 
-  <form class="search-bar" onsubmit="go(event)">
+  <div class="search-bar">
     <input
       type="text"
       id="repo-input"
       placeholder="owner/name — e.g. fastapi/fastapi"
       autofocus
     />
-    <button type="submit">search</button>
-  </form>
+    <button type="button" id="search-btn">search</button>
+  </div>
 
   <p class="section-label">try one of these</p>
   <div class="example-repos">
-    {
-      examples.map((r) => (
-        <a href={`/repo/${r}`}>{r}</a>
-      ))
-    }
+    {examples.map((r) => <a href={`/repo/${r}`}>{r}</a>)}
+  </div>
+
+  <div class="actions" style="margin-top: 2rem;">
+    <a href="/explore" class="btn btn-outline" style="display:inline-block;">
+      surprise me
+    </a>
   </div>
 </Base>
 
 <script is:inline>
-  function go(e) {
-    e.preventDefault();
-    var input = document.getElementById("repo-input");
-    var val = input.value.trim();
-    if (!val || !val.includes("/")) return;
-    window.location.href = "/repo/" + val;
+  var btn = document.getElementById("search-btn");
+  var input = document.getElementById("repo-input");
+  if (btn && input) {
+    btn.addEventListener("click", function () {
+      var val = input.value.trim();
+      if (val && val.includes("/")) {
+        window.location.href = "/repo/" + val;
+      }
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        var val = input.value.trim();
+        if (val && val.includes("/")) {
+          window.location.href = "/repo/" + val;
+        }
+      }
+    });
   }
 </script>

@@ -3,7 +3,7 @@ FastAPI serving layer for the MVP.
 
 Endpoints:
   GET  /health                liveness check
-  GET  /recommend?repo=...    ranked recommendations
+  GET  /recommend?repo=...    ranked recommendations with features
   GET  /explore?seed=...      surprise me — random repo + its recs
 """
 from __future__ import annotations
@@ -22,18 +22,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class RepoOut(BaseModel):
+class ScoredRepoOut(BaseModel):
     id: int
     full_name: str
     description: str | None = None
     language: str | None = None
     topics: list[str] = Field(default_factory=list)
     stars: int
+    score: float = 0.0
+    features: dict[str, float] = Field(default_factory=dict)
+    shared_topics: list[str] = Field(default_factory=list)
+    shared_language: bool = False
 
 
 class RecommendResponse(BaseModel):
     source_repo: str
-    repos: list[RepoOut]
+    repos: list[ScoredRepoOut]
 
 
 class HealthResponse(BaseModel):
@@ -81,7 +85,7 @@ async def recommend(
 
     return RecommendResponse(
         source_repo=rec.source_repo,
-        repos=[RepoOut(**r.model_dump()) for r in rec.repos],
+        repos=[ScoredRepoOut(**r.model_dump()) for r in rec.repos],
     )
 
 
@@ -100,5 +104,5 @@ async def explore(
 
     return RecommendResponse(
         source_repo=rec.source_repo,
-        repos=[RepoOut(**r.model_dump()) for r in rec.repos],
+        repos=[ScoredRepoOut(**r.model_dump()) for r in rec.repos],
     )

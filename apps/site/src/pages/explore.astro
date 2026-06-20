@@ -1,7 +1,5 @@
 ---
 import Base from "../layouts/Base.astro";
-
-const seed = Math.floor(Math.random() * 99999);
 ---
 
 <Base>
@@ -11,8 +9,9 @@ const seed = Math.floor(Math.random() * 99999);
   </p>
 
   <div class="actions">
-    <button class="btn" onclick="roll()">surprise me</button>
-    <button class="btn btn-outline" onclick="rollAgain()">another one</button>
+    <button class="btn" id="roll-btn">surprise me</button>
+    <button class="btn btn-outline" id="again-btn">another one</button>
+    <a href="/" class="btn btn-outline" style="display:inline-block;">back to search</a>
   </div>
 
   <div id="explore-result">
@@ -21,53 +20,98 @@ const seed = Math.floor(Math.random() * 99999);
 </Base>
 
 <script is:inline>
-  const API = "http://localhost:8001";
+  var API = "http://localhost:8001";
+
+  function fmt(n) {
+    if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return String(n);
+  }
+
+  function scoreColor(score) {
+    if (score >= 0.7) return "high";
+    if (score >= 0.4) return "medium";
+    return "low";
+  }
+
+  function matchLabel(features) {
+    var parts = [];
+    if (features.language_match >= 1) parts.push("same language");
+    if (features.topic_overlap > 0.3) parts.push("shared topics");
+    if (features.cosine_sim > 0.6) parts.push("similar README");
+    if (features.dep_overlap > 0.3) parts.push("shared deps");
+    if (parts.length === 0) return "loose match";
+    return parts.slice(0, 2).join(" + ");
+  }
+
+  function renderCard(r) {
+    var shared = r.shared_topics || [];
+    var sharedLang = r.shared_language;
+    var lang = r.language || "";
+    var otherTopics = (r.topics || []).filter(function (t) {
+      return shared.indexOf(t) === -1;
+    }).slice(0, 3);
+    var html =
+      '<div class="card">' +
+      '<div class="card-top">' +
+      '<a class="card-repo" href="https://github.com/' + r.full_name + '" target="_blank" rel="noopener">' +
+      r.full_name +
+      "</a>" +
+      '<span class="stars">' + fmt(r.stars) + " ★</span>" +
+      "</div>" +
+      '<div class="card-desc">' + (r.description || "(no description)") + "</div>" +
+      '<div class="card-meta">' +
+      '<span class="score-dot ' + scoreColor(r.score) + '"></span>' +
+      '<span class="badge badge-lang" style="font-size:0.65rem;">' + matchLabel(r.features) + "</span>";
+    if (sharedLang && lang) {
+      html += '<span class="badge badge-lang" style="background:#e8f5e9;border-color:#c8e6c9;color:#2e7d32;">' + lang + "</span>";
+    }
+    if (shared.length > 0) {
+      html += '<span class="badge" style="background:#e3f2fd;border-color:#bbdefb;color:#1565c0;">' + shared.join(", ") + "</span>";
+    }
+    if (lang && !sharedLang) {
+      html += '<span class="badge badge-lang">' + lang + "</span>";
+    }
+    for (var i = 0; i < otherTopics.length; i++) {
+      html += '<span class="pill">' + otherTopics[i] + "</span>";
+    }
+    html += "</div></div>";
+    return html;
+  }
 
   function roll() {
-    const seed = Math.floor(Math.random() * 99999);
+    var seed = Math.floor(Math.random() * 99999);
     load(seed);
   }
 
-  function rollAgain() {
-    roll();
-  }
-
   function load(seed) {
-    const el = document.getElementById("explore-result");
+    var el = document.getElementById("explore-result");
     if (!el) return;
     el.innerHTML = '<div class="loading">grabbing…</div>';
-    fetch(`${API}/explore?seed=${seed}&limit=12`)
-      .then((res) => res.json())
-      .then((data) => {
-        el.innerHTML = `
-          <p class="section-label" style="margin-top:1.5rem">
-            because you looked at <strong>${data.source_repo}</strong>
-          </p>
-          ${data.repos
-            .map(
-              (r) => `
-            <div class="card">
-              <div class="card-top">
-                <span class="card-repo">${r.full_name}</span>
-                <span class="stars">${r.stars.toLocaleString()} ★</span>
-              </div>
-              <div class="card-desc">${r.description || "(no description)"}</div>
-              <div class="card-meta">
-                ${r.language ? `<span class="badge badge-lang">${r.language}</span>` : ""}
-                ${r.topics.slice(0, 4).map((t) => `<span class="pill">${t}</span>`).join("")}
-              </div>
-            </div>`
-            )
-            .join("")}
-        `;
+    fetch(API + "/explore?seed=" + seed + "&limit=12")
+      .then(function (res) {
+        if (!res.ok) throw new Error("API error " + res.status);
+        return res.json();
       })
-      .catch((e) => {
-        el.innerHTML = `<div class="error">${e.message}</div>`;
+      .then(function (data) {
+        var html =
+          '<p class="section-label" style="margin-top:1.5rem">' +
+          "because you looked at <strong>" + data.source_repo + "</strong>" +
+          "</p>";
+        for (var i = 0; i < data.repos.length; i++) {
+          html += renderCard(data.repos[i]);
+        }
+        el.innerHTML = html;
+      })
+      .catch(function (e) {
+        el.innerHTML = '<div class="error">' + e.message + "<br><small>make sure the API is running on port 8001</small></div>";
       });
   }
 
-  const params = new URLSearchParams(window.location.search);
-  const initialSeed = params.get("seed");
+  document.getElementById("roll-btn")?.addEventListener("click", roll);
+  document.getElementById("again-btn")?.addEventListener("click", roll);
+
+  var params = new URLSearchParams(window.location.search);
+  var initialSeed = params.get("seed");
   if (initialSeed) {
     load(parseInt(initialSeed));
   }

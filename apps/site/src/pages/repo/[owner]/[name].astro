@@ -9,12 +9,14 @@ const { owner, name } = Astro.params;
 const repo = `${owner}/${name}`;
 const seedParam = Astro.url.searchParams.get("seed");
 const seed = seedParam ? parseInt(seedParam) : undefined;
+const tagsParam = Astro.url.searchParams.get("tags");
+const tags = tagsParam ? tagsParam.split(",").map(t => t.trim()).filter(Boolean) : undefined;
 
 let data: RecommendResponse | null = null;
 let error: string | null = null;
 
 try {
-  data = await fetchRecommendations(repo, 12, seed);
+  data = await fetchRecommendations(repo, 12, seed, tags);
 } catch (e) {
   error = e instanceof Error ? e.message : "failed to load";
 }
@@ -46,6 +48,11 @@ function matchLabel(features: Record<string, number>): string {
   <p class="subtitle">
     <a href="/" style="color: var(--accent-dim);">&larr; back</a>
   </p>
+  {tags && tags.length > 0 && (
+    <p class="section-label">
+      filtering by: {tags.map(t => <span class="badge" style="background:#e8f5e9;border-color:#c8e6c9;color:#2e7d32;font-size:0.75rem;">{t}</span>)}
+    </p>
+  )}
 
   {
     error ? (
@@ -121,13 +128,19 @@ function matchLabel(features: Record<string, number>): string {
 </Base>
 
 <script is:inline>
+  function buildUrl(newSeed) {
+    var url = window.location.pathname + "?seed=" + newSeed;
+    var tags = new URLSearchParams(window.location.search).get("tags");
+    if (tags) url += "&tags=" + encodeURIComponent(tags);
+    return url;
+  }
   document.getElementById("reroll-btn")?.addEventListener("click", function () {
     var seed = Math.floor(Math.random() * 99999);
-    window.location.href = window.location.pathname + "?seed=" + seed;
+    window.location.href = buildUrl(seed);
   });
 
   document.getElementById("diff-btn")?.addEventListener("click", function () {
     var seed = Math.floor(Math.random() * 99999);
-    window.location.href = window.location.pathname + "?seed=" + seed;
+    window.location.href = buildUrl(seed);
   });
 </script>

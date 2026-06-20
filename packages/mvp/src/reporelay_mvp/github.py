@@ -219,9 +219,9 @@ async def save_repo(owner: str, name: str) -> int:
             await data.upsert_repo(
                 session,
                 repo_id=repo_id,
-                owner=metadata["owner"]["login"],
-                name=metadata["name"],
-                full_name=metadata["full_name"],
+                owner=owner,
+                name=name,
+                full_name=f"{owner}/{name}",
                 description=metadata.get("description"),
                 language=language,
                 topics=topics,

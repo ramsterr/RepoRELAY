@@ -66,6 +66,7 @@ async def recommend(
     *,
     limit: int = 10,
     seed: int | None = None,
+    tags: list[str] | None = None,
 ) -> ScoredRecommendation:
     if limit <= 0:
         raise ValueError("limit must be > 0")
@@ -87,9 +88,9 @@ async def recommend(
             if source is None:
                 raise LookupError(f"failed to fetch repo {full_name!r} from GitHub")
 
-        candidates = await _expand_pool(session, source, seed=seed)
+        candidates = await _expand_pool(session, source, seed=seed, tags=tags)
 
-        scored = score_many(source, candidates, seed=seed)
+        scored = score_many(source, candidates, seed=seed, tags=tags)
         final = rerank(source, scored, limit=limit, seed=seed)
 
         scored_repos: list[ScoredRepo] = []
@@ -107,9 +108,10 @@ async def _expand_pool(
     source: Repo,
     *,
     seed: int | None = None,
+    tags: list[str] | None = None,
 ) -> list[tuple[Repo, float]]:
     """Generate candidates, expanding via GitHub if pool is too small."""
-    candidates = await generate_candidates(session, source, seed=seed)
+    candidates = await generate_candidates(session, source, seed=seed, tags=tags)
     if len(candidates) >= POOL_MIN:
         logger.info("candidate pool: %d (no expansion needed)", len(candidates))
         return candidates
@@ -143,7 +145,7 @@ async def _expand_pool(
 
     fresh_session = await data.get_session()
     try:
-        new_candidates = await generate_candidates(fresh_session, source, seed=seed)
+        new_candidates = await generate_candidates(fresh_session, source, seed=seed, tags=tags)
     finally:
         await fresh_session.close()
 

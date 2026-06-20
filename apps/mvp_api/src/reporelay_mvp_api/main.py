@@ -69,14 +69,19 @@ async def recommend(
     repo: str = Query(..., description="Source repo as owner/name"),
     limit: int = Query(10, ge=1, le=50),
     seed: int | None = Query(None, description="Seed for deterministic shuffle"),
+    tags: str | None = Query(None, description="Comma-separated tags to filter by (e.g. react,typescript)"),
 ) -> RecommendResponse:
     if "/" not in repo:
         raise HTTPException(
             status_code=400, detail="repo must be in 'owner/name' format"
         )
 
+    tag_list: list[str] | None = None
+    if tags:
+        tag_list = [t.strip().lower() for t in tags.split(",") if t.strip()]
+
     try:
-        rec = await recommend_fn(repo, limit=limit, seed=seed)
+        rec = await recommend_fn(repo, limit=limit, seed=seed, tags=tag_list)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

@@ -26,6 +26,12 @@ const examples = [
       placeholder="owner/name or paste a GitHub URL"
       autofocus
     />
+    <input
+      type="text"
+      id="tags-input"
+      placeholder="tags (optional) — e.g. react, typescript"
+      style="max-width:280px;"
+    />
     <button type="button" id="search-btn">search</button>
   </div>
 
@@ -56,17 +62,24 @@ const examples = [
 
   var btn = document.getElementById("search-btn");
   var input = document.getElementById("repo-input");
+  var tagsInput = document.getElementById("tags-input");
+  function doSearch() {
+    var repo = parseRepo(input.value);
+    if (!repo) return;
+    var url = "/repo/" + repo;
+    var rawTags = (tagsInput && tagsInput.value || "").trim();
+    if (rawTags) url += "?tags=" + encodeURIComponent(rawTags.split(/\s*,\s*/).join(","));
+    window.location.href = url;
+  }
   if (btn && input) {
-    btn.addEventListener("click", function () {
-      var repo = parseRepo(input.value);
-      if (repo) window.location.href = "/repo/" + repo;
-    });
+    btn.addEventListener("click", doSearch);
     input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        var repo = parseRepo(input.value);
-        if (repo) window.location.href = "/repo/" + repo;
-      }
+      if (e.key === "Enter") { e.preventDefault(); doSearch(); }
     });
+    if (tagsInput) {
+      tagsInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); doSearch(); }
+      });
+    }
   }
 </script>

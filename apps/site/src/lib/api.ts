@@ -22,9 +22,11 @@ export async function fetchRecommendations(
   repo: string,
   limit = 10,
   seed?: number,
+  tags?: string[],
 ): Promise<RecommendResponse> {
   const params = new URLSearchParams({ repo, limit: String(limit) });
   if (seed !== undefined) params.set("seed", String(seed));
+  if (tags && tags.length > 0) params.set("tags", tags.join(","));
   const res = await fetch(`${API}/recommend?${params}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

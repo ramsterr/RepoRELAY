@@ -38,6 +38,7 @@ async def generate_candidates(
     pool_size: int = 250,
     vector_k: int = 150,
     seed: int | None = None,
+    tags: list[str] | None = None,
 ) -> list[tuple[Repo, float]]:
     sql_pool = await data.fetch_filtered_pool(
         session,
@@ -67,16 +68,32 @@ async def generate_candidates(
         seen.add(repo.id)
         merged.append((repo, NEUTRAL_SIM))
 
+    # tag filtering — keep only repos that have at least one requested tag
+    filtered = merged
+    if tags:
+        tag_set = {t.lower() for t in tags}
+        filtered = [
+            (repo, sim)
+            for repo, sim in merged
+            if tag_set & {t.lower() for t in repo.topics}
+        ]
+        if filtered:
+            merged = filtered
+            logger.info("tag filter: %d candidates after filtering by %s", len(merged), tags)
+        else:
+            logger.info("no candidates matched tags=%s, keeping all %d", tags, len(merged))
+
     if seed is not None:
         rng = random.Random(seed)
         rng.shuffle(merged)
 
     logger.info(
-        "candidate pool: sql=%d vector=%d merged=%d seed=%s",
+        "candidate pool: sql=%d vector=%d merged=%d seed=%s tags=%s",
         len(sql_pool),
         len(vector_pool),
         len(merged),
         seed,
+        tags,
     )
     return merged
 

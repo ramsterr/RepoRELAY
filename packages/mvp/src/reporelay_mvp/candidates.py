@@ -11,10 +11,15 @@ The two sets are merged by id and de-duplicated. The result is a
 small pool (~150-250 candidates) that the scorer can evaluate cheaply.
 Each candidate also carries its cosine similarity (0.5 for SQL-only
 hits that have no embedding-based score).
+
+When `seed` is not None, the merged pool is shuffled deterministically
+with `random.Random(seed)` so different seeds produce different result
+orderings while the same seed always produces the same ordering.
 """
 from __future__ import annotations
 
 import logging
+import random
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +37,7 @@ async def generate_candidates(
     *,
     pool_size: int = 250,
     vector_k: int = 150,
+    seed: int | None = None,
 ) -> list[tuple[Repo, float]]:
     sql_pool = await data.fetch_filtered_pool(
         session,
@@ -61,12 +67,16 @@ async def generate_candidates(
         seen.add(repo.id)
         merged.append((repo, NEUTRAL_SIM))
 
+    if seed is not None:
+        rng = random.Random(seed)
+        rng.shuffle(merged)
+
     logger.info(
-        "candidate pool: sql=%d vector=%d merged=%d (sql-only: %d)",
+        "candidate pool: sql=%d vector=%d merged=%d seed=%s",
         len(sql_pool),
         len(vector_pool),
         len(merged),
-        sum(1 for r, s in merged if r.id not in {vid for vid, _ in vector_pool.items()}),
+        seed,
     )
     return merged
 

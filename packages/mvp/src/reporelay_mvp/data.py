@@ -143,6 +143,24 @@ async def count_repos(session: AsyncSession) -> int:
     return int(rows.scalar() or 0)
 
 
+async def get_random_repo(session: AsyncSession, *, seed: int) -> Repo | None:
+    """Pick a random repo using a seed for deterministic random selection."""
+    total = await count_repos(session)
+    if total == 0:
+        return None
+    import random
+    rng = random.Random(seed)
+    offset = rng.randint(0, total - 1)
+    rows = await session.execute(
+        text(
+            f"SELECT {EXPECTED_COLUMNS} FROM mvp_repos ORDER BY id LIMIT 1 OFFSET :offset"
+        ),
+        {"offset": offset},
+    )
+    row = rows.fetchone()
+    return _row_to_repo(row) if row else None
+
+
 async def fetch_filtered_pool(
     session: AsyncSession,
     *,

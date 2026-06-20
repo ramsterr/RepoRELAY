@@ -4,6 +4,7 @@ FastAPI serving layer for the MVP.
 Endpoints:
   GET  /health                liveness check
   GET  /recommend?repo=...    ranked recommendations
+  GET  /explore?seed=...      surprise me — random repo + its recs
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from reporelay_mvp import recommend as recommend_fn
+from reporelay_mvp import recommend_random as explore_fn
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ async def health() -> HealthResponse:
 async def recommend(
     repo: str = Query(..., description="Source repo as owner/name"),
     limit: int = Query(10, ge=1, le=50),
+    seed: int | None = Query(None, description="Seed for deterministic shuffle"),
 ) -> RecommendResponse:
     if "/" not in repo:
         raise HTTPException(
@@ -61,7 +64,7 @@ async def recommend(
         )
 
     try:
-        rec = await recommend_fn(repo, limit=limit)
+        rec = await recommend_fn(repo, limit=limit, seed=seed)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -73,3 +76,21 @@ async def recommend(
         repos=[RepoOut(**r.model_dump()) for r in rec.repos],
     )
 
+
+@app.get("/explore", response_model=RecommendResponse)
+async def explore(
+    seed: int = Query(..., description="Seed for deterministic random pick"),
+    limit: int = Query(10, ge=1, le=50),
+) -> RecommendResponse:
+    try:
+        rec = await explore_fn(seed=seed, limit=limit)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("explore failed")
+        raise HTTPException(status_code=500, detail="internal error") from exc
+
+    return RecommendResponse(
+        source_repo=rec.source_repo,
+        repos=[RepoOut(**r.model_dump()) for r in rec.repos],
+    )

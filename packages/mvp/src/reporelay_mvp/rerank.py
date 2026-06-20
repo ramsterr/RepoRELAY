@@ -18,6 +18,8 @@ so the seed actually changes which repos survive the diversity filter.
 
 from __future__ import annotations
 
+from typing import Any
+
 from reporelay_mvp.models import Repo
 
 

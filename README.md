@@ -18,51 +18,68 @@ Five steps, each one a single file:
 | 4. Score | `score.py` | Weighted sum of the 5 features |
 | 5. Rerank | `rerank.py` | Kicks out same-owner repos, enforces one-per-owner diversity |
 
-## Setup
+## Getting Started (step by step)
 
-You need Docker running and a GitHub token:
+You need three things on your machine: **Docker**, **Python 3.12**, and **uv** (pip install uv).
+
+### Step 1 — Get a GitHub token
+
+The data comes from the **GitHub API**. It's free. Go to https://github.com/settings/tokens, create a "classic" token, no scopes needed, and copy it.
 
 ```bash
-# 1. Create a .env file (copy from main branch .env.example)
-echo 'GITHUB_TOKEN=ghp_your_token_here' > .env
-
-# 2. Start Postgres
-docker compose -f infra/docker-compose.yml up -d postgres
-
-# 3. Install deps
-uv sync
-
-# 4. Run the migration (creates mvp_repos table)
-just mvp-migrate
+echo 'DATABASE_URL=postgresql+psycopg://reporelay:reporelay@localhost:5439/reporelay' > .env
+echo 'GITHUB_TOKEN=ghp_your_token_here' >> .env
 ```
 
-## Usage
+That's where the repo data comes from. When you run `just mvp save`, it calls GitHub's API and asks "tell me about this repo" — then stores the answer in Postgres.
 
-CLI:
+### Step 2 — Start Postgres
 
 ```bash
-# Save a repo to the DB
+docker compose -f infra/docker-compose.yml up -d postgres
+```
+
+This starts a Postgres 16 container with the pgvector extension. One container, that's it.
+
+### Step 3 — Install dependencies
+
+```bash
+uv sync
+```
+
+Installs FastAPI, SQLAlchemy, sentence-transformers, httpx — everything the project needs.
+
+### Step 4 — Create the database table
+
+```bash
+just migrate
+```
+
+Runs a migration that creates the `mvp_repos` table in Postgres. You only do this once.
+
+### Step 5 — Put some repos in the database
+
+```bash
 just mvp save fastapi/fastapi
 just mvp save django/django
-
-# Check how many repos you have
-just mvp count
-
-# Get recommendations
-just mvp recommend fastapi/fastapi --limit 5
-just mvp recommend fastapi/fastapi --limit 5 --json   # machine-readable
+just mvp save pallets/flask
+just mvp save psf/requests
 ```
 
-API:
+Each `save` command does three things:
+1. Calls GitHub's API for the repo's metadata (language, topics, stars, README)
+2. Runs the README through a pre-trained model to get 384 numbers (an embedding)
+3. Stores everything in the `mvp_repos` table
+
+The model downloads the first time (~11 seconds), then stays in memory.
+
+### Step 6 — Ask for recommendations
 
 ```bash
-just mvp-api                                    # starts on port 8001
-
-curl localhost:8001/health
-curl "localhost:8001/recommend?repo=django/django&limit=5"
+just mvp recommend fastapi/fastapi --limit 5
 ```
 
-## What you'll see
+This looks up fastapi in the database, finds the most similar repos using 5 different signals, scores them, and prints a ranked list. [→ How it actually works](ARCHITECTURE.md)
 
 ```
 recommendations for fastapi/fastapi
@@ -70,10 +87,16 @@ recommendations for fastapi/fastapi
    1. pallets/flask  (Python, 71680 stars, topics: python, flask, wsgi)
    2. psf/requests   (Python, 54043 stars, topics: python, http, forhumans)
    3. django/django  (Python, 87917 stars, topics: python, django, web)
-   4. nestjs/nest    (TypeScript, 75917 stars, topics: nest, javascript, typescript)
 ```
 
-Python repos come first (language match), web frameworks cluster together (topic overlap), and the ranking makes intuitive sense even with 8 repos in the DB.
+### Optional — Run as an API
+
+```bash
+just api                                         # starts on port 8001
+curl "localhost:8001/recommend?repo=django/django&limit=5"
+```
+
+---
 
 ## Tuning
 

@@ -22,11 +22,23 @@ psql:
 api:
     uv run --package reporelay-api uvicorn reporelay_api.main:app --reload --port 8000
 
+mvp-api:
+    uv run --package reporelay-mvp-api uvicorn reporelay_mvp_api.main:app --reload --port 8001
+
+mvp-migrate:
+    uv run --package reporelay-mvp alembic -c packages/mvp/alembic.ini upgrade head
+
+mvp-new-migration MESSAGE:
+    uv run --package reporelay-mvp alembic -c packages/mvp/alembic.ini revision --autogenerate -m "{{MESSAGE}}"
+
 site:
     pnpm --filter reporelay-site dev
 
 ingest *ARGS:
     uv run --package reporelay-ingest reporelay-ingest {{ARGS}}
+
+mvp *ARGS:
+    uv run --package reporelay-mvp reporelay-mvp {{ARGS}}
 
 lint:
     uv run ruff check .

@@ -13,6 +13,8 @@ members = [
     "reporelay-core",
     "reporelay-engine",
     "reporelay-ingest",
+    "reporelay-mvp",
+    "reporelay-mvp-api",
 ]
 
 [[package]]
@@ -1444,6 +1446,56 @@ requires-dist = [
     { name = "sentence-transformers", specifier = ">=3.0.0" },
     { name = "tenacity", specifier = ">=9.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
+]
+
+[[package]]
+name = "reporelay-mvp"
+version = "0.1.0"
+source = { editable = "packages/mvp" }
+dependencies = [
+    { name = "alembic" },
+    { name = "httpx" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "rich" },
+    { name = "sentence-transformers" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "tenacity" },
+    { name = "typer" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.13.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
+    { name = "pydantic", specifier = ">=2.8.0" },
+    { name = "pydantic-settings", specifier = ">=2.4.0" },
+    { name = "rich", specifier = ">=13.8.0" },
+    { name = "sentence-transformers", specifier = ">=3.0.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
+    { name = "tenacity", specifier = ">=9.0.0" },
+    { name = "typer", specifier = ">=0.12.0" },
+]
+
+[[package]]
+name = "reporelay-mvp-api"
+version = "0.1.0"
+source = { editable = "apps/mvp_api" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "reporelay-mvp" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "pydantic", specifier = ">=2.8.0" },
+    { name = "reporelay-mvp", editable = "packages/mvp" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
 
 [[package]]

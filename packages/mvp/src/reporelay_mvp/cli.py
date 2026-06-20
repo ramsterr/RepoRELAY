@@ -6,7 +6,9 @@ Commands:
   reporelay-mvp count                 show how many repos are stored
   reporelay-mvp recommend owner/name  print ranked recommendations
   reporelay-mvp explore               surprise me — random repo, recs
+  reporelay-mvp seed                  bulk-index the corpus from GitHub search
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +24,7 @@ from rich.logging import RichHandler
 from reporelay_mvp import recommend as recommend_func
 from reporelay_mvp import recommend_random as explore_func
 from reporelay_mvp.github import save_repo
+from reporelay_mvp.seed import DEFAULT_LANGUAGES, seed_corpus
 from reporelay_mvp.settings import get_mvp_settings
 
 app = typer.Typer(help="RepoRelay MVP CLI", no_args_is_help=True)
@@ -122,6 +125,51 @@ def explore(
         return
 
     _print_results(rec)
+
+
+@app.command()
+def seed(
+    per_language: int = typer.Option(300, help="repos to index per language"),
+    languages: str = typer.Option(
+        "", help="comma-separated languages (default: top 10 by repo count)"
+    ),
+    min_stars: int = typer.Option(100, help="GitHub stars floor"),
+    page_delay: float = typer.Option(
+        2.0, help="seconds between search API calls (2.0 = 30 req/min)"
+    ),
+) -> None:
+    """
+    Bulk-index the corpus from GitHub search.
+
+    Default is 300 repos × 10 languages = 3,000 repos, no extra REST
+    calls beyond the 30 search requests. Idempotent — re-running
+    upserts and refreshes search_fetched_at.
+    """
+    _configure_logging()
+    lang_list: list[str] | None = None
+    if languages:
+        lang_list = [s.strip() for s in languages.split(",") if s.strip()]
+    else:
+        lang_list = list(DEFAULT_LANGUAGES)
+
+    console.print(
+        f"[bold]seeding corpus: {per_language} repos × {len(lang_list)} languages "
+        f"= {per_language * len(lang_list)} target rows[/bold]"
+    )
+    console.print(f"[dim]languages: {', '.join(lang_list)}[/dim]")
+    console.print(f"[dim]min stars: {min_stars}, page delay: {page_delay}s[/dim]")
+
+    result = asyncio.run(
+        seed_corpus(
+            languages=lang_list,
+            per_language=per_language,
+            min_stars=min_stars,
+            page_delay_s=page_delay,
+        )
+    )
+    console.print(f"[bold green]done — {result['grand_total']} repos indexed[/bold green]")
+    for lang, count in result["totals"].items():
+        console.print(f"  {lang}: {count}")
 
 
 def _print_results(rec: Any) -> None:

@@ -15,6 +15,7 @@ we apply the rules against the top-scoring repos. When `seed` is set,
 the candidate pool has already been shuffled — we preserve that order
 so the seed actually changes which repos survive the diversity filter.
 """
+
 from __future__ import annotations
 
 from reporelay_mvp.models import Repo

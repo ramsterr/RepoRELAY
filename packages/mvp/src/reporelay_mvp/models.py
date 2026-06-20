@@ -5,6 +5,7 @@ Kept intentionally simple: a Repo, a Recommendation, and the structured
 feature vector used by the scorer. No blend state, no user profile, no
 lifecycle stage.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

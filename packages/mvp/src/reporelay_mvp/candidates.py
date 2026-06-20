@@ -16,6 +16,7 @@ When `seed` is not None, the merged pool is shuffled deterministically
 with `random.Random(seed)` so different seeds produce different result
 orderings while the same seed always produces the same ordering.
 """
+
 from __future__ import annotations
 
 import logging
@@ -69,19 +70,21 @@ async def generate_candidates(
         merged.append((repo, NEUTRAL_SIM))
 
     # tag filtering — keep only repos that have at least one requested tag
-    filtered = merged
     if tags:
         tag_set = {t.lower() for t in tags}
         filtered = [
-            (repo, sim)
-            for repo, sim in merged
-            if tag_set & {t.lower() for t in repo.topics}
+            (repo, sim) for repo, sim in merged if tag_set & {t.lower() for t in repo.topics}
         ]
         if filtered:
             merged = filtered
             logger.info("tag filter: %d candidates after filtering by %s", len(merged), tags)
         else:
-            logger.info("no candidates matched tags=%s, keeping all %d", tags, len(merged))
+            logger.warning(
+                "tag filter eliminated all %d candidates for tags=%s — returning empty pool",
+                len(merged),
+                tags,
+            )
+            return []
 
     if seed is not None:
         rng = random.Random(seed)
@@ -96,5 +99,3 @@ async def generate_candidates(
         tags,
     )
     return merged
-
-

@@ -8,6 +8,7 @@ Revision ID: mvp_001
 Revises:
 Create Date: 2026-06-20
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -44,9 +45,7 @@ def upgrade() -> None:
             server_default="{}",
         ),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()
-        ),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("embedded_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.execute("ALTER TABLE mvp_repos ADD COLUMN embedding vector(384)")

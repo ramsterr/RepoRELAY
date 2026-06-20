@@ -5,7 +5,9 @@ Endpoints:
   GET  /health                liveness check
   GET  /recommend?repo=...    ranked recommendations with features
   GET  /explore?seed=...      surprise me — random repo + its recs
+  GET  /popular?limit=...     top repos by stars — for the homepage
 """
+
 from __future__ import annotations
 
 import logging
@@ -14,7 +16,9 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 
+from reporelay_mvp import data as mvp_data
 from reporelay_mvp import recommend as recommend_fn
 from reporelay_mvp import recommend_random as explore_fn
 
@@ -64,17 +68,62 @@ async def health() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
+class PopularRepo(BaseModel):
+    id: int
+    full_name: str
+    description: str | None = None
+    language: str | None = None
+    stars: int
+
+
+class PopularResponse(BaseModel):
+    repos: list[PopularRepo]
+
+
+@app.get("/popular", response_model=PopularResponse)
+async def popular(
+    limit: int = Query(8, ge=1, le=50),
+) -> PopularResponse:
+    """Top repos by stars — used by the homepage examples list."""
+    session = await mvp_data.get_session()
+    try:
+        rows = await session.execute(
+            text(
+                """
+                SELECT id, full_name, description, language, stars
+                FROM mvp_repos
+                ORDER BY stars DESC
+                LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        )
+        repos = [
+            PopularRepo(
+                id=r.id,
+                full_name=r.full_name,
+                description=r.description,
+                language=r.language,
+                stars=r.stars,
+            )
+            for r in rows
+        ]
+    finally:
+        await session.close()
+    return PopularResponse(repos=repos)
+
+
 @app.get("/recommend", response_model=RecommendResponse)
 async def recommend(
     repo: str = Query(..., description="Source repo as owner/name"),
     limit: int = Query(10, ge=1, le=50),
     seed: int | None = Query(None, description="Seed for deterministic shuffle"),
-    tags: str | None = Query(None, description="Comma-separated tags to filter by (e.g. react,typescript)"),
+    tags: str | None = Query(
+        None, description="Comma-separated tags to filter by (e.g. react,typescript)"
+    ),
 ) -> RecommendResponse:
     if "/" not in repo:
-        raise HTTPException(
-            status_code=400, detail="repo must be in 'owner/name' format"
-        )
+        raise HTTPException(status_code=400, detail="repo must be in 'owner/name' format")
 
     tag_list: list[str] | None = None
     if tags:

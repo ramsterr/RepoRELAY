@@ -4,6 +4,7 @@ Direct database access for the MVP.
 Five small queries, each one obvious from its name. No graph traversal,
 no co-star counts, no materialized views.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -14,9 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from reporelay_mvp.db import _get_sessionmaker
 from reporelay_mvp.models import Repo
 
-EXPECTED_COLUMNS = (
-    "id, owner, name, full_name, description, language, topics, stars, dependencies"
-)
+EXPECTED_COLUMNS = "id, owner, name, full_name, description, language, topics, stars, dependencies"
 
 
 def _row_to_repo(row: Any) -> Repo:
@@ -87,6 +86,85 @@ async def upsert_repo(
     )
 
 
+async def bulk_upsert_from_search(
+    session: AsyncSession,
+    items: list[dict[str, Any]],
+) -> int:
+    """
+    Upsert a batch of GitHub search-result items into mvp_repos.
+
+    Search results carry everything we need for the recommender
+    (metadata, language, topics, stars, description) — no per-repo
+    REST call is required. We mark `search_fetched_at` so a follow-up
+    pass can identify rows that still need a README + embedding.
+
+    Returns the number of rows written.
+    """
+    if not items:
+        return 0
+    params: list[dict[str, Any]] = []
+    for item in items:
+        params.append(
+            {
+                "id": int(item["id"]),
+                "owner": item["owner"]["login"],
+                "name": item["name"],
+                "full_name": item["full_name"],
+                "description": item.get("description"),
+                "language": item.get("language"),
+                "topics": list(item.get("topics") or []),
+                "stars": int(item.get("stargazers_count") or 0),
+            }
+        )
+    await session.execute(
+        text(
+            """
+            INSERT INTO mvp_repos (
+                id, owner, name, full_name, description, language,
+                topics, stars, dependencies, updated_at, search_fetched_at
+            ) VALUES (
+                :id, :owner, :name, :full_name, :description, :language,
+                :topics, :stars, '{}', NOW(), NOW()
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                owner = EXCLUDED.owner,
+                name = EXCLUDED.name,
+                full_name = EXCLUDED.full_name,
+                description = EXCLUDED.description,
+                language = EXCLUDED.language,
+                topics = EXCLUDED.topics,
+                stars = EXCLUDED.stars,
+                updated_at = NOW(),
+                search_fetched_at = NOW()
+            """
+        ),
+        params,
+    )
+    return len(params)
+
+
+async def list_repos_needing_embedding(session: AsyncSession, *, limit: int) -> list[Repo]:
+    """
+    Return repos that have been indexed from search but have no
+    embedding yet — candidates for the enrichment pass that fetches
+    the README and computes the vector.
+    """
+    rows = await session.execute(
+        text(
+            f"""
+            SELECT {EXPECTED_COLUMNS}
+            FROM mvp_repos
+            WHERE search_fetched_at IS NOT NULL
+              AND embedded_at IS NULL
+            ORDER BY stars DESC
+            LIMIT :limit
+            """
+        ),
+        {"limit": limit},
+    )
+    return [_row_to_repo(r) for r in rows]
+
+
 async def set_embedding(
     session: AsyncSession,
     *,
@@ -105,9 +183,7 @@ async def set_embedding(
     )
 
 
-async def get_repo(
-    session: AsyncSession, full_name: str
-) -> Repo | None:
+async def get_repo(session: AsyncSession, full_name: str) -> Repo | None:
     rows = await session.execute(
         text(f"SELECT {EXPECTED_COLUMNS} FROM mvp_repos WHERE full_name = :full_name"),
         {"full_name": full_name},
@@ -125,9 +201,7 @@ async def get_repo_by_id(session: AsyncSession, repo_id: int) -> Repo | None:
     return _row_to_repo(row) if row else None
 
 
-async def get_embedding(
-    session: AsyncSession, repo_id: int
-) -> list[float] | None:
+async def get_embedding(session: AsyncSession, repo_id: int) -> list[float] | None:
     rows = await session.execute(
         text("SELECT embedding FROM mvp_repos WHERE id = :id"),
         {"id": repo_id},
@@ -149,12 +223,11 @@ async def get_random_repo(session: AsyncSession, *, seed: int) -> Repo | None:
     if total == 0:
         return None
     import random
+
     rng = random.Random(seed)
     offset = rng.randint(0, total - 1)
     rows = await session.execute(
-        text(
-            f"SELECT {EXPECTED_COLUMNS} FROM mvp_repos ORDER BY id LIMIT 1 OFFSET :offset"
-        ),
+        text(f"SELECT {EXPECTED_COLUMNS} FROM mvp_repos ORDER BY id LIMIT 1 OFFSET :offset"),
         {"offset": offset},
     )
     row = rows.fetchone()

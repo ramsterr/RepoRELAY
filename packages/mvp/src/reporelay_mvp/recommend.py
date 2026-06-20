@@ -9,12 +9,15 @@ weights are jittered — giving different results per seed while
 remaining deterministic (same seed = same results).
 
 If the source repo is not in the DB, it is automatically fetched from
-GitHub and saved. If the candidate pool is small (< 20), related repos
-are discovered from GitHub and added to the pool.
+GitHub and saved. The candidate pool is always built from two sources:
+the local DB (fast, has embeddings) and a fresh GitHub search (live,
+has variety). Search hits are persisted back to the DB so the corpus
+grows over time.
 
 `recommend_random(seed)` picks a random source repo and runs the
 pipeline against it — the "surprise me / explore" feature.
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,14 +26,20 @@ from typing import Any
 from reporelay_mvp import data
 from reporelay_mvp.candidates import generate_candidates
 from reporelay_mvp.features import compute_features
-from reporelay_mvp.github import save_repo, search_repos
+from reporelay_mvp.github import (
+    _auth_client,
+    _search_item_to_repo,
+    save_repo,
+    search_repositories,
+)
 from reporelay_mvp.models import Repo, ScoredRecommendation, ScoredRepo
 from reporelay_mvp.rerank import rerank
 from reporelay_mvp.score import score_many
+from reporelay_mvp.settings import get_mvp_settings
 
 logger = logging.getLogger(__name__)
 
-POOL_MIN = 6  # threshold — expand pool if we have fewer candidates than this
+SEARCH_LIMIT = 100  # how many fresh candidates to pull from GitHub per call
 
 
 def _build_scored_repo(
@@ -109,36 +118,67 @@ async def _expand_pool(
     seed: int | None = None,
     tags: list[str] | None = None,
 ) -> list[tuple[Repo, float]]:
-    """Generate candidates, expanding via GitHub if pool is too small."""
-    candidates = await generate_candidates(session, source, seed=seed, tags=tags)
-    if len(candidates) >= POOL_MIN:
-        logger.info("candidate pool: %d (no expansion needed)", len(candidates))
-        return candidates
+    """
+    Build the candidate pool from two sources:
 
-    logger.info("small pool (%d) — discovering related repos from GitHub (ephemeral)", len(candidates))
-    gh_repos = await search_repos(
-        source.owner, source.name, limit=20, seed=seed
-    )
-    if not gh_repos:
-        logger.info("no related repos found on GitHub")
-        return candidates
+    1. The local DB (pgvector ANN + SQL filter) — fast, has
+       embeddings for cosine sim, but only knows about rows we've
+       already indexed.
+    2. A live GitHub search — uses the source's topics OR'd
+       together with its language, returns up to SEARCH_LIMIT
+       fresh results.
 
-    existing_ids: set[int] = {source.id}
-    for cand, _ in candidates:
-        existing_ids.add(cand.id)
+    Search hits are persisted back to the DB so the corpus grows
+    over time. They're scored with cosine_sim = 0 (no embedding
+    yet); the other four features (language, topics, deps,
+    popularity) carry the score for these.
+    """
+    db_candidates = await generate_candidates(session, source, seed=seed, tags=tags)
+    logger.info("db pool: %d candidates", len(db_candidates))
 
-    added = 0
+    settings = get_mvp_settings()
+    search_items: list[dict[str, Any]] = []
+    try:
+        async with _auth_client(settings.github_token) as client:
+            payload = await search_repositories(
+                client,
+                topics=source.topics or None,
+                language=source.language,
+                min_stars=100,
+                sort="stars",
+                per_page=SEARCH_LIMIT,
+                page=1,
+            )
+            search_items = list(payload.get("items", []))
+    except Exception as exc:
+        logger.warning("github search failed: %s — falling back to db-only pool", exc)
+        return db_candidates
+
+    if not search_items:
+        logger.info("github search returned 0 items — db pool only")
+        return db_candidates
+
+    written = await data.bulk_upsert_from_search(session, search_items)
+    await session.commit()
+    logger.info("github search: %d items, %d upserted to db", len(search_items), written)
+
+    candidates: list[tuple[Repo, float]] = list(db_candidates)
+    seen: set[int] = {c.id for c, _ in db_candidates}
+    seen.add(source.id)
+
     tag_set = {t.lower() for t in tags} if tags else None
-    for repo in gh_repos:
-        if repo.id in existing_ids:
+    added = 0
+    for item in search_items:
+        repo = _search_item_to_repo(item)
+        if repo.id in seen:
             continue
         if tag_set and not (tag_set & {t.lower() for t in repo.topics}):
             continue
-        existing_ids.add(repo.id)
-        candidates.append((repo, 0.5))  # neutral cosine for ephemeral repos
+        seen.add(repo.id)
+        candidates.append((repo, 0.0))
         added += 1
 
-    logger.info("expanded pool: %d -> %d (added %d ephemeral)", len(candidates) - added, len(candidates), added)
+    logger.info("merged pool: %d db + %d search = %d", len(db_candidates), added, len(candidates))
     return candidates
 
 

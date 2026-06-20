@@ -4,6 +4,7 @@ Settings for the MVP package.
 The MVP reuses the database from the main app but with its own table
 (`mvp_repos`). It does not require Redis.
 """
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -18,9 +19,7 @@ class MvpSettings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = (
-        "postgresql+psycopg://reporelay:reporelay@localhost:5439/reporelay"
-    )
+    database_url: str = "postgresql+psycopg://reporelay:reporelay@localhost:5439/reporelay"
     github_token: str = ""
 
     embedding_dim: int = 384

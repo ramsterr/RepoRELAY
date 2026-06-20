@@ -72,9 +72,6 @@ function matchLabel(features: Record<string, number>): string {
           <button class="btn btn-outline" id="reroll-btn">
             rerun with new seed
           </button>
-          <button class="btn btn-outline" id="diff-btn">
-            different results
-          </button>
         </div>
 
         <div id="results">
@@ -135,11 +132,6 @@ function matchLabel(features: Record<string, number>): string {
     return url;
   }
   document.getElementById("reroll-btn")?.addEventListener("click", function () {
-    var seed = Math.floor(Math.random() * 99999);
-    window.location.href = buildUrl(seed);
-  });
-
-  document.getElementById("diff-btn")?.addEventListener("click", function () {
     var seed = Math.floor(Math.random() * 99999);
     window.location.href = buildUrl(seed);
   });

@@ -4,6 +4,7 @@ Database access for the MVP.
 Reuses the same Postgres instance as the main app, but reads/writes its
 own `mvp_repos` table. No Redis, no co-star materialized view, no graph.
 """
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator

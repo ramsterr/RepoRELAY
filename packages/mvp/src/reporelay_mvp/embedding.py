@@ -2,6 +2,7 @@
 Embedding for the MVP. Uses the same model as the main app
 (`all-MiniLM-L6-v2`, 384 dims) so the embedding space is comparable.
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,7 +33,5 @@ def embed_text(text_value: str) -> list[float]:
     if not text_value or not text_value.strip():
         return [0.0] * 384
     model = _get_model()
-    vector = model.encode(
-        text_value, show_progress_bar=False, normalize_embeddings=False
-    )
+    vector = model.encode(text_value, show_progress_bar=False, normalize_embeddings=False)
     return vector.tolist()

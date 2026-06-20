@@ -9,6 +9,7 @@ names from the GitHub API dependency graph if available, otherwise we
 leave the dependency list empty. The dependency feature still works
 as long as some repos have deps populated.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -53,6 +54,15 @@ def _auth_headers(token: str) -> dict[str, str]:
     return headers
 
 
+def _auth_client(token: str) -> httpx.AsyncClient:
+    """Build a pre-configured httpx async client for the GitHub API."""
+    return httpx.AsyncClient(
+        base_url=GITHUB_API,
+        headers=_auth_headers(token),
+        timeout=httpx.Timeout(15.0, connect=8.0),
+    )
+
+
 @retry(
     retry=retry_if_exception_type(_RateLimited),
     wait=wait_exponential(multiplier=2, min=30, max=600),
@@ -76,15 +86,11 @@ def _decode_base64_text(content: str) -> str:
     return base64.b64decode(content + padding).decode("utf-8", errors="replace")
 
 
-async def fetch_repo_metadata(
-    client: httpx.AsyncClient, owner: str, name: str
-) -> dict[str, Any]:
+async def fetch_repo_metadata(client: httpx.AsyncClient, owner: str, name: str) -> dict[str, Any]:
     return await _get(client, f"/repos/{owner}/{name}")
 
 
-async def fetch_readme(
-    client: httpx.AsyncClient, owner: str, name: str
-) -> str:
+async def fetch_readme(client: httpx.AsyncClient, owner: str, name: str) -> str:
     try:
         data_dict = await _get(client, f"/repos/{owner}/{name}/readme")
     except httpx.HTTPStatusError as exc:
@@ -94,9 +100,7 @@ async def fetch_readme(
     return _decode_base64_text(data_dict.get("content", ""))
 
 
-async def fetch_topics(
-    client: httpx.AsyncClient, owner: str, name: str
-) -> list[str]:
+async def fetch_topics(client: httpx.AsyncClient, owner: str, name: str) -> list[str]:
     try:
         response = await client.get(
             f"/repos/{owner}/{name}/topics",
@@ -111,18 +115,14 @@ async def fetch_topics(
     return list(payload.get("names", []))
 
 
-async def fetch_dependencies(
-    client: httpx.AsyncClient, owner: str, name: str
-) -> list[str]:
+async def fetch_dependencies(client: httpx.AsyncClient, owner: str, name: str) -> list[str]:
     """
     Use the GitHub dependency graph if exposed. Returns the package
     names (no version constraints). Empty list if the API is not
     available for this repo.
     """
     try:
-        response = await client.get(
-            f"/repos/{owner}/{name}/dependencies", follow_redirects=True
-        )
+        response = await client.get(f"/repos/{owner}/{name}/dependencies", follow_redirects=True)
     except httpx.HTTPError:
         return []
     if response.status_code != 200:
@@ -154,9 +154,7 @@ async def search_repos(
     headers = _auth_headers(settings.github_token)
     timeout = httpx.Timeout(10.0, connect=8.0)
 
-    async with httpx.AsyncClient(
-        base_url=GITHUB_API, headers=headers, timeout=timeout
-    ) as client:
+    async with httpx.AsyncClient(base_url=GITHUB_API, headers=headers, timeout=timeout) as client:
         topics = await fetch_topics(client, owner, name)
         metadata = await fetch_repo_metadata(client, owner, name)
         language = metadata.get("language")
@@ -172,47 +170,87 @@ async def search_repos(
     page = rng.randint(1, max(1, limit // 5)) if seed is not None else 1
     per_page = min(limit * 2, 100)
 
-    query_parts: list[str] = []
-    if topic:
-        query_parts.append(f"topic:{topic}")
-    if language:
-        query_parts.append(f"language:{language}")
-    query_parts.append("stars:>100")
-    query = " ".join(query_parts)
-
     try:
         async with httpx.AsyncClient(
             base_url=GITHUB_API, headers=headers, timeout=timeout
         ) as client:
-            raw = await _get(
+            raw = await search_repositories(
                 client,
-                "/search/repositories",
-                q=query,
+                topics=[topic] if topic else None,
+                language=language,
+                min_stars=100,
                 sort=sort_choice,
-                order="desc",
                 per_page=per_page,
                 page=page,
             )
     except Exception:
         return []
 
-    results: list[Repo] = []
-    for item in raw.get("items", []):
-        results.append(
-            Repo(
-                id=int(item["id"]),
-                owner=item["owner"]["login"],
-                name=item["name"],
-                full_name=item["full_name"],
-                description=item.get("description"),
-                language=item.get("language"),
-                topics=list(item.get("topics") or []),
-                stars=int(item.get("stargazers_count") or 0),
-                dependencies=[],
-                embedding=None,
-            )
-        )
-    return results
+    return [_search_item_to_repo(item) for item in raw.get("items", [])]
+
+
+def _search_item_to_repo(item: dict[str, Any]) -> Repo:
+    return Repo(
+        id=int(item["id"]),
+        owner=item["owner"]["login"],
+        name=item["name"],
+        full_name=item["full_name"],
+        description=item.get("description"),
+        language=item.get("language"),
+        topics=list(item.get("topics") or []),
+        stars=int(item.get("stargazers_count") or 0),
+        dependencies=[],
+        embedding=None,
+    )
+
+
+async def search_repositories(
+    client: httpx.AsyncClient,
+    *,
+    topics: list[str] | None = None,
+    language: str | None = None,
+    min_stars: int = 100,
+    sort: str = "stars",
+    order: str = "desc",
+    per_page: int = 100,
+    page: int = 1,
+) -> dict[str, Any]:
+    """
+    Single GitHub search/repositories call. Returns the raw response
+    payload (with `items`, `total_count`, etc.) so callers can either
+    use the rows directly or bulk-upsert them.
+
+    Query construction:
+      - one topic at a time (the GitHub search API does NOT allow
+        `topic:X OR topic:Y` — it returns 422; OR of qualifiers
+        is unsupported)
+      - language is used as a FALLBACK when no topics are available
+      - `archived:false` is always added
+      - stars floor is configurable
+    """
+    query_parts: list[str] = []
+    if topics:
+        # Filter out empty topics and pick the first one — see the
+        # `iter_search_by_topics` helper below for proper OR-of-topics
+        # semantics (one search per topic, results merged by the caller).
+        first = next((t for t in topics if t), None)
+        if first:
+            query_parts.append(f"topic:{first}")
+    elif language:
+        query_parts.append(f"language:{language}")
+    query_parts.append("archived:false")
+    query_parts.append(f"stars:>{min_stars}")
+    query = " ".join(query_parts)
+
+    return await _get(
+        client,
+        "/search/repositories",
+        q=query,
+        sort=sort,
+        order=order,
+        per_page=per_page,
+        page=page,
+    )
 
 
 async def save_repo(owner: str, name: str) -> int:
@@ -224,9 +262,7 @@ async def save_repo(owner: str, name: str) -> int:
     headers = _auth_headers(settings.github_token)
     timeout = httpx.Timeout(30.0, connect=10.0)
 
-    async with httpx.AsyncClient(
-        base_url=GITHUB_API, headers=headers, timeout=timeout
-    ) as client:
+    async with httpx.AsyncClient(base_url=GITHUB_API, headers=headers, timeout=timeout) as client:
         metadata = await fetch_repo_metadata(client, owner, name)
         repo_id = int(metadata["id"])
 

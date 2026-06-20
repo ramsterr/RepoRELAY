@@ -11,6 +11,7 @@ For each (source, candidate) pair, we compute five features:
 
 All features are in [0, 1]. The scorer is a fixed weighted sum.
 """
+
 from __future__ import annotations
 
 import math

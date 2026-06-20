@@ -12,6 +12,7 @@ When `seed` is not None, each weight is jittered by ±10% and the
 popularity_sim weight is boosted by 3x (to surface "cooler" repos).
 The jitter is deterministic — same seed = same weights.
 """
+
 from __future__ import annotations
 
 import random

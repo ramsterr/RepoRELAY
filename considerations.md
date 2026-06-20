@@ -91,3 +91,20 @@ but donot focus on  watch count , issue count , PR count etc
 
 ## hot cold variant IN DATABASE management
 use a redis layer , keep the more important things like stars , dependencies etc etc in it
+
+
+
+##  vector compression and semantic 
+
+Material to Study
+Spotify's Research Papers:
+"Generalized user representations for large-scale recommendations" - https://research.atspotify.com/2025/9/generalized-user-representations-for-large-scale-recommendations
+"Teaching large language models to speak Spotify" - https://research.atspotify.com/2025/11/teaching-large-language-models-to-speak-spotify-how-semantic-ids-enable
+Key Papers to Read:
+"Product Quantization for Nearest Neighbor Search" by Jégou et al.
+"SAX: A Symbolic Representation of Time Series" by Lin et al.
+Practical Guide:
+"Vector Compression for Recommendation Systems" (Practical guide on FAISS implementation)
+
+repos - FAISS by facebook , scaNN by google
+

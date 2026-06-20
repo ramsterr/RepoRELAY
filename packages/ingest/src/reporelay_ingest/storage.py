@@ -149,3 +149,61 @@ def _parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+async def insert_dependencies(
+    session: AsyncSession, repo_id: int, deps: list[dict[str, Any]]
+) -> None:
+    for dep in deps:
+        await session.execute(
+            text(
+                """
+                INSERT INTO dependency_edges (repo_id, dependency_name, ecosystem, version_constraint, is_dev)
+                VALUES (:repo_id, :name, :ecosystem, :version, :is_dev)
+                ON CONFLICT DO NOTHING
+                """
+            ),
+            {
+                "repo_id": repo_id,
+                "name": dep["name"],
+                "ecosystem": dep.get("ecosystem", "unknown"),
+                "version": dep.get("version", ""),
+                "is_dev": dep.get("is_dev", False),
+            },
+        )
+    await session.flush()
+
+
+async def insert_star_events(
+    session: AsyncSession, events: list[dict[str, Any]]
+) -> int:
+    count = 0
+    for event in events:
+        starred_at = _parse_starred_at(event.get("starred_at"))
+        await session.execute(
+            text(
+                """
+                INSERT INTO star_events (user_id, repo_id, starred_at)
+                VALUES (:user_id, :repo_id, :starred_at)
+                ON CONFLICT DO NOTHING
+                """
+            ),
+            {
+                "user_id": event["user_id"],
+                "repo_id": event["repo_id"],
+                "starred_at": starred_at,
+            },
+        )
+        count += 1
+    await session.flush()
+    return count
+
+
+def _parse_starred_at(value: Any) -> datetime | None:
+    if value is None:
+        return datetime.now(timezone.utc)
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return value

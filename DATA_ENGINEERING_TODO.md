@@ -51,85 +51,85 @@ Ordered sequence. Each task is small enough to complete in one session.
 
 ## Phase 4: Seed Ingest — Batch
 
-- [ ] `04.01` Create `ingest seed-topics` command — fetch top repos per topic from GitHub search API
-- [ ] `04.02` Seed top 10 topics, 20 repos each = 200 repos
-- [ ] `04.03` Create `ingest seed-languages` command — fetch top repos per language
-- [ ] `04.04` Seed top 5 languages, 20 repos each = 100 repos
-- [ ] `04.05` Run dedup across topic and language seeds
-- [ ] `04.06` Verify total unique repos in database ≥ 200
+- [x] `04.01` Create `ingest seed-topics` command — fetch top repos per topic from GitHub search API
+- [x] `04.02` Seed top 10 topics, 20 repos each = 200 repos
+- [x] `04.03` Create `ingest seed-languages` command — fetch top repos per language
+- [x] `04.04` Seed top 5 languages, 20 repos each = 100 repos
+- [x] `04.05` Run dedup across topic and language seeds
+- [x] `04.06` Verify total unique repos in database ≥ 200
 
 ## Phase 5: Dependency Graph Ingestion
 
-- [ ] `05.01` Create Libraries.io API client (or parse manifest files directly from GitHub)
-- [ ] `05.02` Write `detect_manifest(repo)` — find `package.json`, `requirements.txt`, `Cargo.toml` in repo
-- [ ] `05.03` Write `parse_manifest(filename, content)` — extract `{name, version, ecosystem}`
-- [ ] `05.04` Write `insert_dependencies()` — INSERT INTO dependency_edges
-- [ ] `05.05` Run `ingest deps vercel next.js` — verify dependencies stored
-- [ ] `05.06` Batch: ingest dependencies for all 200 seed repos
-- [ ] `05.07` Verify dependency_edges total row count > 0
+- [x] `05.01` Create Libraries.io API client (or parse manifest files directly from GitHub)
+- [x] `05.02` Write `detect_manifest(repo)` — find `package.json`, `requirements.txt`, `Cargo.toml` in repo
+- [x] `05.03` Write `parse_manifest(filename, content)` — extract `{name, version, ecosystem}`
+- [x] `05.04` Write `insert_dependencies()` — INSERT INTO dependency_edges
+- [x] `05.05` Run `ingest deps vercel next.js` — verify dependencies stored
+- [x] `05.06` Batch: ingest dependencies for all 200 seed repos
+- [x] `05.07` Verify dependency_edges total row count > 0
 
 ## Phase 6: Star Events from GitHub Archive
 
-- [ ] `06.01` Research GitHub Archive BigQuery schema for star events
-- [ ] `06.02` Write BigQuery SQL to extract star events for our seed repos from last 6 months
-- [ ] `06.03` Export results as CSV/JSON
-- [ ] `06.04` Create `ingest load-stars` command — bulk INSERT into star_events from file
-- [ ] `06.05` Run load-stars on exported data
-- [ ] `06.06` Verify `SELECT COUNT(*) FROM star_events` returns meaningful number
+- [x] `06.01` Research GitHub Archive BigQuery schema for star events
+- [x] `06.02` Write BigQuery SQL to extract star events for our seed repos from last 6 months
+- [x] `06.03` Export results as CSV/JSON
+- [x] `06.04` Create `ingest load-stars` command — bulk INSERT into star_events from file
+- [x] `06.05` Run load-stars on exported data
+- [x] `06.06` Verify `SELECT COUNT(*) FROM star_events` returns meaningful number
 
 ## Phase 7: Co-Star Materialized View
 
-- [ ] `07.01` Write `co_star_counts` materialized view SQL
-- [ ] `07.02` Run `CREATE MATERIALIZED VIEW co_star_counts`
-- [ ] `07.03` Create index on `co_star_counts(repo_a, co_star_count DESC)`
-- [ ] `07.04` Create `ingest refresh-co-stars` command — `REFRESH MATERIALIZED VIEW CONCURRENTLY`
-- [ ] `07.05` Verify: query co_star_counts for a known repo, check results look reasonable
+- [x] `07.01` Write `co_star_counts` materialized view SQL
+- [x] `07.02` Run `CREATE MATERIALIZED VIEW co_star_counts`
+- [x] `07.03` Create index on `co_star_counts(repo_a, co_star_count DESC)`
+- [x] `07.04` Create `ingest refresh-co-stars` command — `REFRESH MATERIALIZED VIEW CONCURRENTLY`
+- [x] `07.05` Verify: query co_star_counts for a known repo, check results look reasonable
 
 ## Phase 8: Graph Setup (Apache AGE)
 
-- [ ] `08.01` Verify AGE extension loaded: `SELECT * FROM ag_catalog.ag_graph;`
-- [ ] `08.02` Create graph: `SELECT create_graph('reporelay');`
-- [ ] `08.03` Create node label Repo in AGE: `SELECT create_vlabel('reporelay', 'Repo');`
-- [ ] `08.04` Create node label User in AGE
-- [ ] `08.05` Create edge label `DEPENDS_ON` with weight property
-- [ ] `08.06` Create edge label `STARRED_BY` with starred_at property
-- [ ] `08.07` Create edge label `CONTRIBUTED_TO` with commit_count property
-- [ ] `08.08` Create edge label `HAS_TOPIC`
-- [ ] `08.09` Write `load_to_age()` function — sync nodes and edges from Postgres tables into AGE graph
-- [ ] `08.10` Run load_to_age on one repo — verify nodes and edges exist via Cypher query
-- [ ] `08.11` Index AGE nodes by id, edges by start_id + type
+- [x] `08.01` Verify AGE extension loaded: `SELECT * FROM ag_catalog.ag_graph;`
+- [x] `08.02` Create graph: `SELECT create_graph('reporelay');`
+- [x] `08.03` Create node label Repo in AGE: `SELECT create_vlabel('reporelay', 'Repo');`
+- [x] `08.04` Create node label User in AGE
+- [x] `08.05` Create edge label `DEPENDS_ON` with weight property
+- [x] `08.06` Create edge label `STARRED_BY` with starred_at property
+- [x] `08.07` Create edge label `CONTRIBUTED_TO` with commit_count property
+- [x] `08.08` Create edge label `HAS_TOPIC`
+- [x] `08.09` Write `load_to_age()` function — sync nodes and edges from Postgres tables into AGE graph
+- [x] `08.10` Run load_to_age on one repo — verify nodes and edges exist via Cypher query
+- [x] `08.11` Index AGE nodes by id, edges by start_id + type
 
 ## Phase 9: Two-Hop Neighbors (Precomputed)
 
-- [ ] `09.01` Write Cypher query for 1-hop neighbors from a repo
-- [ ] `09.02` Write Cypher query for 2-hop neighbors (neighbors of neighbors)
-- [ ] `09.03` Create `ingest compute-2hop repo_id` command — runs Cypher, writes to `two_hop_neighbors` table
-- [ ] `09.04` Run on one repo, verify data in two_hop_neighbors table
-- [ ] `09.05` Batch compute 2-hop for all seed repos
-- [ ] `09.06` Create `ingest refresh-2hop` command for periodic updates
+- [x] `09.01` Write Cypher query for 1-hop neighbors from a repo
+- [x] `09.02` Write Cypher query for 2-hop neighbors (neighbors of neighbors)
+- [x] `09.03` Create `ingest compute-2hop repo_id` command — runs Cypher, writes to `two_hop_neighbors` table
+- [x] `09.04` Run on one repo, verify data in two_hop_neighbors table
+- [x] `09.05` Batch compute 2-hop for all seed repos
+- [x] `09.06` Create `ingest refresh-2hop` command for periodic updates
 
 ## Phase 10: Embedding Pipeline
 
-- [ ] `10.01` Choose embedding model (sentence-transformers all-MiniLM-L6-v2 for MVP)
-- [ ] `10.02` Add model dependency to `packages/engine/pyproject.toml`
-- [ ] `10.03` Write `compute_embedding(text) -> list[float]` function
-- [ ] `10.04` Create `ingest embed-readme repo_id` command — reads raw_text, computes embedding, stores in readme_texts
-- [ ] `10.05` Run on one repo, verify `SELECT vector_dims(embedding) FROM readme_texts` returns 384
-- [ ] `10.06` Batch embed all repos with READMEs
-- [ ] `10.07` Create `ingest embed-all` command
-- [ ] `10.08` Run ANN test query: `SELECT repo_id, 1 - (embedding <=> $vec) AS sim FROM readme_texts ORDER BY sim DESC LIMIT 10`
-- [ ] `10.09` Manually verify: do the top 10 results actually make sense for the query repo?
+- [x] `10.01` Choose embedding model (sentence-transformers all-MiniLM-L6-v2 for MVP)
+- [x] `10.02` Add model dependency to `packages/engine/pyproject.toml`
+- [x] `10.03` Write `compute_embedding(text) -> list[float]` function
+- [x] `10.04` Create `ingest embed-readme repo_id` command — reads raw_text, computes embedding, stores in readme_texts
+- [x] `10.05` Run on one repo, verify `SELECT vector_dims(embedding) FROM readme_texts` returns 384
+- [x] `10.06` Batch embed all repos with READMEs
+- [x] `10.07` Create `ingest embed-all` command
+- [x] `10.08` Run ANN test query: `SELECT repo_id, 1 - (embedding <=> $vec) AS sim FROM readme_texts ORDER BY sim DESC LIMIT 10`
+- [x] `10.09` Manually verify: do the top 10 results actually make sense for the query repo?
 
 ## Phase 11: Redis Caching Layer
 
-- [ ] `11.01` Write `cache_repo_features(repo_id)` — store feature vector in Redis with TTL=6h
-- [ ] `11.02` Write `get_cached_features(repo_id)` — return from Redis or None
-- [ ] `11.03` Write `cache_blend_state(user_id)` — store user blend in Redis with TTL=24h
-- [ ] `11.04` Write `get_cached_blend(user_id)` — return from Redis or None with Postgres fallback
-- [ ] `11.05` Write `cache_recommendations(key, result)` — store rec response with TTL=5min
-- [ ] `11.06` Write `get_cached_recommendations(key)` — return from Redis or None
-- [ ] `11.07` Integrate cache checks into API `/recommend` endpoint
-- [ ] `11.08` Test: run same request twice, verify second call hits cache (use Redis MONITOR)
+- [x] `11.01` Write `cache_repo_features(repo_id)` — store feature vector in Redis with TTL=6h
+- [x] `11.02` Write `get_cached_features(repo_id)` — return from Redis or None
+- [x] `11.03` Write `cache_blend_state(user_id)` — store user blend in Redis with TTL=24h
+- [x] `11.04` Write `get_cached_blend(user_id)` — return from Redis or None with Postgres fallback
+- [x] `11.05` Write `cache_recommendations(key, result)` — store rec response with TTL=5min
+- [x] `11.06` Write `get_cached_recommendations(key)` — return from Redis or None
+- [x] `11.07` Integrate cache checks into API `/recommend` endpoint
+- [x] `11.08` Test: run same request twice, verify second call hits cache (use Redis MONITOR)
 
 ## Phase 12: Connect Engine to Real Data
 

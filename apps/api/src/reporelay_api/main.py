@@ -79,8 +79,36 @@ async def recommend(
             status_code=400,
             detail="repo must be in 'owner/name' format",
         )
+
+    cache_key = f"{repo}:{user_id or 'anon'}:{limit}"
+
+    try:
+        from reporelay_core.cache import (
+            cache_recommendations,
+            get_cached_recommendations,
+        )
+
+        cached = await get_cached_recommendations(cache_key)
+        if cached is not None:
+            logger.info("Cache hit for %s", cache_key)
+            return RecommendResponse(**cached)
+    except Exception:
+        logger.debug("Redis unavailable, skipping cache", exc_info=True)
+
     rec = await engine.recommend(repo, user_id=user_id, limit=limit)
-    return _to_response(rec)
+    response = _to_response(rec)
+
+    try:
+        from reporelay_core.cache import cache_recommendations
+
+        await cache_recommendations(
+            cache_key,
+            response.model_dump(mode="json"),
+        )
+    except Exception:
+        logger.debug("Redis unavailable, skipping cache write", exc_info=True)
+
+    return response
 
 
 @app.post("/feedback", response_model=BlendStateOut)
@@ -88,11 +116,29 @@ async def record_feedback(body: FeedbackRequest) -> BlendStateOut:
     if body.feedback not in ("up", "down"):
         raise HTTPException(status_code=400, detail="feedback must be 'up' or 'down'")
     state = await engine.record_feedback(body.user_id, body.repo, body.feedback)
-    return _to_blend_out(state)
+    result = _to_blend_out(state)
+
+    try:
+        from reporelay_core.cache import cache_blend_state
+
+        await cache_blend_state(body.user_id, result.model_dump(mode="json"))
+    except Exception:
+        logger.debug("Redis unavailable, skipping blend cache", exc_info=True)
+
+    return result
 
 
 @app.get("/blend/{user_id}", response_model=BlendStateOut)
 async def get_blend(user_id: str) -> BlendStateOut:
+    try:
+        from reporelay_core.cache import get_cached_blend
+
+        cached = await get_cached_blend(user_id)
+        if cached is not None:
+            return BlendStateOut(**cached)
+    except Exception:
+        logger.debug("Redis unavailable, skipping blend cache read", exc_info=True)
+
     profile = engine.get_or_create_profile(user_id)
     return _to_blend_out(profile.blend)
 

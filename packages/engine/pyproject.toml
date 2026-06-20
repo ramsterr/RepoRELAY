@@ -8,6 +8,7 @@ dependencies = [
     "reporelay-core",
     "pydantic>=2.8.0",
     "numpy>=2.0.0",
+    "sentence-transformers>=3.0.0",
 ]
 
 [build-system]

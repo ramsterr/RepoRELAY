@@ -149,6 +149,31 @@ class GitHubClient:
         data = await self.get(f"/repos/{owner}/{name}/languages")
         return cast("dict[str, int]", data)
 
+    async def search_repos(
+        self, query: str, sort: str = "stars", order: str = "desc", per_page: int = 20
+    ) -> list[dict[str, Any]]:
+        data = await self.get(
+            "/search/repositories",
+            q=query,
+            sort=sort,
+            order=order,
+            per_page=per_page,
+        )
+        return cast("list[dict[str, Any]]", data.get("items", []))
+
+    async def get_file_content(self, owner: str, name: str, path: str) -> str | None:
+        try:
+            data = await self.get(f"/repos/{owner}/{name}/contents/{path}")
+        except httpx.HTTPStatusError:
+            return None
+        content = data.get("content", "")
+        if not content:
+            return None
+        import base64
+
+        padding = "=" * (-len(content) % 4)
+        return base64.b64decode(content + padding).decode("utf-8", errors="replace")
+
 
 def _demo() -> None:
     from rich.console import Console

@@ -36,7 +36,7 @@ Treat GitHub as a **background data source**, not a real-time dependency. The re
 
 The seed script (`packages/mvp/src/reporelay_mvp/seed.py`) is the workhorse. Currently 3,000 repos are indexed; the steps below push that to ~20,000 with real embeddings. The single biggest quality gap right now is that **none of the 3,000 repos have embeddings** — pgvector ANN is doing nothing useful. Until the embed pass runs, the recommender leans on language/topic/popularity, not content similarity.
 
-- [ ] **Embed the top 1,000 repos** — fetch each `search_fetched_at IS NOT NULL AND embedded_at IS NULL` row, download the README, run `embed_text()`, store the 384-dim vector. Unlocks pgvector ANN. CLI: `just mvp embed --limit 1000` (to be added)
+- [x] **Embed the top 1,000 repos** — fetch each `search_fetched_at IS NOT NULL AND embedded_at IS NULL` row, download the README, run `embed_text()`, store the 384-dim vector. Unlocks pgvector ANN. CLI: `just mvp embed --limit 1000` (DONE — 1,011 embedded, puppeteer→playwright, tensorflow→caffe, redis→valkey)
 - [ ] **Scale existing 10 languages to 1,000 each** — `just mvp seed --per-language 1000` brings 3,000 → 10,000 in ~10 min (100 search calls at 30 req/min)
 - [ ] **Add 10 more languages** — `just mvp seed --per-language 1000 --languages kotlin,swift,dart,scala,elixir,haskell,julia,lua,r,perl` adds another ~10,000 rows
 - [ ] **Multi-topic search in `_expand_pool`** — currently uses only the source's first topic. Switch to one search per top-4 topic, merge the result lists (~30 lines in `github.py` + `recommend.py`). Uses 4 of the 30 req/min budget per request but gives proper OR-of-topics semantics

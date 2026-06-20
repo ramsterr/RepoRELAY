@@ -145,17 +145,18 @@ async def bulk_upsert_from_search(
 
 async def list_repos_needing_embedding(session: AsyncSession, *, limit: int) -> list[Repo]:
     """
-    Return repos that have been indexed from search but have no
-    embedding yet — candidates for the enrichment pass that fetches
-    the README and computes the vector.
+    Return repos that have no embedding yet — candidates for the
+    enrichment pass that fetches the README and computes the vector.
+
+    Covers both search-indexed rows and manually-saved rows
+    (save_repo sets embedding inline but may be out of date).
     """
     rows = await session.execute(
         text(
             f"""
             SELECT {EXPECTED_COLUMNS}
             FROM mvp_repos
-            WHERE search_fetched_at IS NOT NULL
-              AND embedded_at IS NULL
+            WHERE embedding IS NULL
             ORDER BY stars DESC
             LIMIT :limit
             """

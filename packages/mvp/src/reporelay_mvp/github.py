@@ -137,6 +137,59 @@ async def fetch_dependencies(
     return packages
 
 
+async def search_repos(
+    owner: str, name: str, *, limit: int = 5
+) -> list[dict[str, Any]]:
+    """
+    Discover related repos from GitHub via a single topic+language search.
+
+    Returns popular repos similar to the source, limited to avoid rate
+    limits. Used to expand small candidate pools.
+    """
+    settings = get_mvp_settings()
+    headers = _auth_headers(settings.github_token)
+    timeout = httpx.Timeout(15.0, connect=10.0)
+
+    async with httpx.AsyncClient(
+        base_url=GITHUB_API, headers=headers, timeout=timeout
+    ) as client:
+        topics = await fetch_topics(client, owner, name)
+        metadata = await fetch_repo_metadata(client, owner, name)
+        language = metadata.get("language")
+
+    primary_topic = topics[0] if topics else ""
+    if not primary_topic and not language:
+        return []
+
+    query_parts: list[str] = []
+    if primary_topic:
+        query_parts.append(f"topic:{primary_topic}")
+    if language:
+        query_parts.append(f"language:{language}")
+    query_parts.append("stars:>500")
+    query = " ".join(query_parts)
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=GITHUB_API, headers=headers, timeout=timeout
+        ) as client:
+            raw = await _get(
+                client,
+                "/search/repositories",
+                q=query,
+                sort="stars",
+                order="desc",
+                per_page=limit,
+            )
+    except Exception:
+        return []
+
+    results: list[dict[str, Any]] = []
+    for item in raw.get("items", []):
+        results.append(item)
+    return results
+
+
 async def save_repo(owner: str, name: str) -> int:
     """
     Fetch a single repo from GitHub, persist its row, and embed its

@@ -23,7 +23,7 @@ const examples = [
     <input
       type="text"
       id="repo-input"
-      placeholder="owner/name — e.g. fastapi/fastapi"
+      placeholder="owner/name or paste a GitHub URL"
       autofocus
     />
     <button type="button" id="search-btn">search</button>
@@ -42,22 +42,30 @@ const examples = [
 </Base>
 
 <script is:inline>
+  function parseRepo(val) {
+    val = val.trim();
+    // strip https://github.com/ prefix
+    var m = val.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+\/[^\/\s?#]+)/i);
+    if (m) return m[1];
+    // strip leading slash if present: /owner/name -> owner/name
+    if (val.startsWith("/")) val = val.slice(1);
+    // plain owner/name
+    if (val.includes("/") && !val.includes(" ")) return val;
+    return null;
+  }
+
   var btn = document.getElementById("search-btn");
   var input = document.getElementById("repo-input");
   if (btn && input) {
     btn.addEventListener("click", function () {
-      var val = input.value.trim();
-      if (val && val.includes("/")) {
-        window.location.href = "/repo/" + val;
-      }
+      var repo = parseRepo(input.value);
+      if (repo) window.location.href = "/repo/" + repo;
     });
     input.addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         e.preventDefault();
-        var val = input.value.trim();
-        if (val && val.includes("/")) {
-          window.location.href = "/repo/" + val;
-        }
+        var repo = parseRepo(input.value);
+        if (repo) window.location.href = "/repo/" + repo;
       }
     });
   }

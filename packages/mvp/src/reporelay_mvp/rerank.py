@@ -10,7 +10,10 @@ Three small rules, applied in order:
   3. Enforce owner diversity — at most one repo per owner in the
      final list, to avoid "ten forks of the same project."
 
-We keep the rest of the list ordered by score.
+When `seed` is None, the list is sorted by score (highest first) so
+we apply the rules against the top-scoring repos. When `seed` is set,
+the candidate pool has already been shuffled — we preserve that order
+so the seed actually changes which repos survive the diversity filter.
 """
 from __future__ import annotations
 
@@ -22,14 +25,18 @@ def rerank(
     scored: list[tuple[Repo, float]],
     *,
     limit: int = 10,
+    seed: int | None = None,
 ) -> list[tuple[Repo, float]]:
     source_owner = source.owner.lower()
     seen_owners: set[str] = set()
     out: list[tuple[Repo, float]] = []
 
-    sorted_scored = sorted(scored, key=lambda pair: pair[1], reverse=True)
+    if seed is not None:
+        working = list(scored)
+    else:
+        working = sorted(scored, key=lambda pair: pair[1], reverse=True)
 
-    for repo, score in sorted_scored:
+    for repo, score in working:
         if repo.id == source.id:
             continue
 
@@ -45,5 +52,8 @@ def rerank(
 
         if len(out) >= limit:
             break
+
+    if seed is not None:
+        out.sort(key=lambda pair: pair[1], reverse=True)
 
     return out

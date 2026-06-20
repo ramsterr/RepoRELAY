@@ -176,21 +176,24 @@ async def fetch_filtered_pool(
     up to `limit` candidates that are at least plausibly in the same
     ecosystem.
     """
-    where = ["id != :repo_id"]
+    where: list[str] = []
     params: dict[str, Any] = {"repo_id": repo_id, "limit": limit}
 
-    if language:
-        where.append("language = :language")
+    if language is not None and topics:
+        where.append("(language = :language OR topics && :topics) AND id != :repo_id")
         params["language"] = language
-    if topics:
-        where.append("topics && :topics")
         params["topics"] = topics
+    elif language is not None:
+        where.append("language = :language AND id != :repo_id")
+        params["language"] = language
+    else:
+        where.append("id != :repo_id")
 
     sql = text(
         f"""
         SELECT {EXPECTED_COLUMNS}
         FROM mvp_repos
-        WHERE {' AND '.join(where)}
+        WHERE {" AND ".join(where) if where else "TRUE"}
         ORDER BY stars DESC
         LIMIT :limit
         """

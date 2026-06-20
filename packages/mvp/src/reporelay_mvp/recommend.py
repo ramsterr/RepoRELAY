@@ -17,7 +17,6 @@ pipeline against it — the "surprise me / explore" feature.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -116,46 +115,31 @@ async def _expand_pool(
         logger.info("candidate pool: %d (no expansion needed)", len(candidates))
         return candidates
 
-    logger.info("small pool (%d) — discovering related repos from GitHub", len(candidates))
-    search_results = await search_repos(
-        source.owner, source.name, limit=POOL_MIN
+    logger.info("small pool (%d) — discovering related repos from GitHub (ephemeral)", len(candidates))
+    gh_repos = await search_repos(
+        source.owner, source.name, limit=20, seed=seed
     )
-    if not search_results:
-        logger.info("no new repos found on GitHub")
+    if not gh_repos:
+        logger.info("no related repos found on GitHub")
         return candidates
 
     existing_ids: set[int] = {source.id}
     for cand, _ in candidates:
         existing_ids.add(cand.id)
 
-    new_ids: list[int] = []
-    for item in search_results:
-        rid = int(item["id"])
-        if rid in existing_ids:
+    added = 0
+    tag_set = {t.lower() for t in tags} if tags else None
+    for repo in gh_repos:
+        if repo.id in existing_ids:
             continue
-        try:
-            await save_repo(item["owner"]["login"], item["name"])
-            new_ids.append(rid)
-            existing_ids.add(rid)
-        except Exception:
-            logger.debug("failed to save discovered repo %s", item.get("full_name", "?"))
+        if tag_set and not (tag_set & {t.lower() for t in repo.topics}):
+            continue
+        existing_ids.add(repo.id)
+        candidates.append((repo, 0.5))  # neutral cosine for ephemeral repos
+        added += 1
 
-    if new_ids:
-        await asyncio.sleep(0.3)
-
-    fresh_session = await data.get_session()
-    try:
-        new_candidates = await generate_candidates(fresh_session, source, seed=seed, tags=tags)
-    finally:
-        await fresh_session.close()
-
-    logger.info(
-        "expanded pool: %d -> %d (saved %d new)",
-        len(candidates),
-        len(new_candidates),
-        len(new_ids),
-    )
-    return new_candidates
+    logger.info("expanded pool: %d -> %d (added %d ephemeral)", len(candidates) - added, len(candidates), added)
+    return candidates
 
 
 async def recommend_random(

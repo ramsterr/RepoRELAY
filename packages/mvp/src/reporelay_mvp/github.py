@@ -26,6 +26,7 @@ from tenacity import (
 
 from reporelay_mvp import data
 from reporelay_mvp.embedding import embed_text
+from reporelay_mvp.models import Repo
 from reporelay_mvp.settings import get_mvp_settings
 
 logger = logging.getLogger(__name__)
@@ -138,17 +139,20 @@ async def fetch_dependencies(
 
 
 async def search_repos(
-    owner: str, name: str, *, limit: int = 5
-) -> list[dict[str, Any]]:
+    owner: str, name: str, *, limit: int = 15, seed: int | None = None
+) -> list[Repo]:
     """
-    Discover related repos from GitHub via a single topic+language search.
+    Discover related repos from GitHub and return ephemeral Repo objects.
 
-    Returns popular repos similar to the source, limited to avoid rate
-    limits. Used to expand small candidate pools.
+    Results are NOT persisted — they're used as temporary candidates
+    only. The seed varies the search (which topic, sort order, page)
+    so different seeds return meaningfully different candidates.
     """
+    import random as _random
+
     settings = get_mvp_settings()
     headers = _auth_headers(settings.github_token)
-    timeout = httpx.Timeout(15.0, connect=10.0)
+    timeout = httpx.Timeout(10.0, connect=8.0)
 
     async with httpx.AsyncClient(
         base_url=GITHUB_API, headers=headers, timeout=timeout
@@ -157,16 +161,23 @@ async def search_repos(
         metadata = await fetch_repo_metadata(client, owner, name)
         language = metadata.get("language")
 
-    primary_topic = topics[0] if topics else ""
-    if not primary_topic and not language:
+    if not topics and not language:
         return []
 
+    rng = _random.Random(seed) if seed is not None else _random.Random()
+
+    # seed-aware: pick a different topic each time
+    topic = rng.choice(topics) if topics else ""
+    sort_choice = rng.choice(["stars", "updated", "forks"])
+    page = rng.randint(1, max(1, limit // 5)) if seed is not None else 1
+    per_page = min(limit * 2, 100)
+
     query_parts: list[str] = []
-    if primary_topic:
-        query_parts.append(f"topic:{primary_topic}")
+    if topic:
+        query_parts.append(f"topic:{topic}")
     if language:
         query_parts.append(f"language:{language}")
-    query_parts.append("stars:>500")
+    query_parts.append("stars:>100")
     query = " ".join(query_parts)
 
     try:
@@ -177,16 +188,30 @@ async def search_repos(
                 client,
                 "/search/repositories",
                 q=query,
-                sort="stars",
+                sort=sort_choice,
                 order="desc",
-                per_page=limit,
+                per_page=per_page,
+                page=page,
             )
     except Exception:
         return []
 
-    results: list[dict[str, Any]] = []
+    results: list[Repo] = []
     for item in raw.get("items", []):
-        results.append(item)
+        results.append(
+            Repo(
+                id=int(item["id"]),
+                owner=item["owner"]["login"],
+                name=item["name"],
+                full_name=item["full_name"],
+                description=item.get("description"),
+                language=item.get("language"),
+                topics=list(item.get("topics") or []),
+                stars=int(item.get("stargazers_count") or 0),
+                dependencies=[],
+                embedding=None,
+            )
+        )
     return results
 
 

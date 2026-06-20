@@ -90,6 +90,8 @@ class RecommendationEngine:
             content_repos, item_cf_repos, user_cf_repos, explore_repos
         )
 
+        pool = [r for r in pool if r.full_name != source_repo]
+
         pool = pool[:total_quota]
 
         slots: list[Slot] = []

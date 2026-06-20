@@ -147,7 +147,20 @@ def _to_response(rec: Recommendation) -> RecommendResponse:
     return RecommendResponse(
         source_repo=rec.source_repo,
         slots=[
-            SlotOut(name=slot.name, repos=slot.repos)
+            SlotOut(
+                name=slot.name,
+                repos=[
+                    Repo(
+                        id=r.id,
+                        full_name=r.full_name,
+                        description=r.description,
+                        stars=r.stars,
+                        language=r.language,
+                        topics=r.topics,
+                    )
+                    for r in slot.repos
+                ],
+            )
             for slot in rec.slots
         ],
     )

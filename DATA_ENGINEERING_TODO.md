@@ -133,14 +133,14 @@ Ordered sequence. Each task is small enough to complete in one session.
 
 ## Phase 12: Connect Engine to Real Data
 
-- [ ] `12.01` Replace `ContentBasedStrategy._fetch_by_similarity` with real pgvector ANN query
-- [ ] `12.02` Replace `ItemBasedCFStrategy._fetch_by_similarity` with real co_star_counts query
-- [ ] `12.03` Replace `UserBasedCFStrategy._fetch_by_similarity` with real user similarity query
-- [ ] `12.04` Replace `ExplorationStrategy._fetch_by_similarity` with real trending query (stars/time)
-- [ ] `12.05` Integrate Redis caching into each strategy (check cache before DB)
-- [ ] `12.06` Run `just api` → call `GET /recommend?repo=vercel/next.js` → verify non-empty slots
-- [ ] `12.07` Manually review: do the returned recommedations make sense?
-- [ ] `12.08` Test feedback loop: call `POST /feedback` a few times, verify blend state changes
+- [x] `12.01` Replace `ContentBasedStrategy._fetch_by_similarity` with real pgvector ANN query
+- [x] `12.02` Replace `ItemBasedCFStrategy._fetch_by_similarity` with real co_star_counts query
+- [x] `12.03` Replace `UserBasedCFStrategy._fetch_by_similarity` with real user similarity query
+- [x] `12.04` Replace `ExplorationStrategy._fetch_by_similarity` with real trending query (stars/time)
+- [x] `12.05` Integrate Redis caching into each strategy (check cache before DB)
+- [x] `12.06` Run `just api` → call `GET /recommend?repo=vercel/next.js` → verify non-empty slots
+- [x] `12.07` Manually review: do the returned recommendations make sense?
+- [x] `12.08` Test feedback loop: call `POST /feedback` a few times, verify blend state changes
 
 ## Phase 13: Refresh Pipeline
 

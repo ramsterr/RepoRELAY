@@ -56,11 +56,12 @@ Key invariants:
 
 Get a working end-to-end loop. Boring, but unblocks everything else.
 
-- [ ] **GitHub Actions: `.github/workflows/seed.yml`** — cron every 6h, runs `just mvp seed --per-language 1000`, uses `DATABASE_URL` + `GITHUB_TOKEN` secrets
+- [ ] **GitHub Actions: `.github/workflows/seed.yml`** — cron every 3h, runs `just mvp seed --per-language 1000`, uses `DATABASE_URL` + `GITHUB_TOKEN` secrets
 - [ ] **GitHub Actions: `.github/workflows/embed.yml`** — cron every 1h (offset by 30min from seed), runs `just mvp embed --limit 500`
 - [ ] **Add structured logging** to `seed_corpus` and `embed_pass` — emit per-language counts, repos/sec, ETA, rate-limit remaining
-- [ ] **Add a `--dry-run` flag** to both commands — estimate work without doing it
+- [ ] **Add a `--dry-run` flag** to both commands — estimate work without calling the API
 - [ ] **README in seed.py** documenting the math: "1000/lang × 10 langs = 30 search calls = 1 minute at 30/min"
+- [ ] **Cadence rationale** — seed (3h) = matches new-repo discovery rate, embed (1h) = keeps the queue drained without burning the 5,000/hour REST budget
 
 **Acceptance:** DB has ≥ 5,000 repos and ≥ 1,000 embeddings after 24h of cron runs.
 
@@ -170,3 +171,57 @@ Stop hand-tuning query strategies. Let the system learn.
 ## Immediate next step
 
 Implement **Phase 1** — the two GitHub Actions workflows. Boring, fast, gets data flowing.
+
+---
+
+## Faster-than-cron data paths (optional add-ons)
+
+When 3h cadence isn't fresh enough, layer these on top of Phase 1:
+
+### Option A — GitHub webhooks (push-based, real-time)
+
+Get notified the moment a tracked repo changes. Replaces polling for re-embeds.
+
+- [ ] **Webhook receiver** — `apps/mvp_api/src/reporelay_mvp_api/webhooks.py`, FastAPI endpoint at `POST /webhooks/github`
+- [ ] **HMAC verification** — `X-Hub-Signature-256` against a `GITHUB_WEBHOOK_SECRET`
+- [ ] **Subscribe to `push` events on watched repos** — via `PUT /repos/{owner}/{repo}/hooks` (one-time setup, done by seeder for each high-value repo)
+- [ ] **On `push` to default branch** — enqueue re-embed (set `embedding = NULL`, let Phase 1's embed cron pick it up)
+- [ ] **Backpressure** — webhook receiver does NOT block; it just `UPDATE`s the row, embed cron does the work
+- [ ] **Rate limit on webhook setup** — only register webhooks for repos with > 1,000 stars (otherwise we hit the 100,000-repo webhook ceiling)
+
+**Acceptance:** A README update to a watched repo triggers a re-embed within 1h (next embed cron tick), not 3h+ (next seed run).
+
+**Tradeoffs:**
+- ✅ Real-time for the repos we care about
+- ❌ Webhook receiver must be a persistent service (Render web service, not GitHub Action)
+- ❌ GitHub may drop webhooks during incidents; need a fallback poll
+
+### Option B — Trending scrape (poll-based, real-time, no API budget)
+
+GitHub's `/trending` page is a public HTML page (not in the API rate limit budget). Scrape it to find repos gaining stars fast.
+
+- [ ] **Scraper** — `packages/mvp/src/reporelay_mvp/trending.py`, hits `https://github.com/trending/{language}?since=daily`
+- [ ] **Parse HTML** — `selectolax` or `beautifulsoup4`, extract: `owner/name`, `description`, `language`, `stars_today`, `total_stars`
+- [ ] **Store in `mvp_repos`** with `trending_score = stars_today` (new column, migration mvp_003)
+- [ ] **Boost in recommender** — when scoring candidates, add `0.1 * normalized(trending_score)` as a feature
+- [ ] **Schedule** — GitHub Action cron every 30 min (no API cost, so cheap to run often)
+- [ ] **Politeness** — `User-Agent: reporelay-bot (+contact)`, respect `robots.txt`, max 1 req / 10s
+
+**Acceptance:** A repo that gains 500 stars in a day shows up in recommendations within 1h, regardless of total stars.
+
+**Tradeoffs:**
+- ✅ Free (no API rate limit), real-time, catches "viral" repos the search API misses
+- ❌ Scraping is fragile (GitHub changes HTML without notice)
+- ❌ No historical data (each scrape is a snapshot)
+- ❌ Against GitHub ToS in spirit — be polite, cache aggressively, don't republish the data
+
+### When to use which
+
+| Use case | Path |
+|---|---|
+| Bulk discovery (popular + new repos) | Phase 1 cron (search) |
+| Re-embed when README changes | Option A (webhooks) |
+| Catch viral/trending repos fast | Option B (trending scrape) |
+| Bulk re-embed of stale repos | Phase 1 cron (embed) |
+
+**Recommended combo:** Phase 1 cron + Option B trending. Add Option A webhooks only when you need sub-hour re-embeds for specific repos.

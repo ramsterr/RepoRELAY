@@ -43,6 +43,8 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     return html;
   }
 
+  var totalCountByTopic = {};
+
   function loadTopics() {
     var el = document.getElementById("explore-container");
     if (!el) return;
@@ -62,6 +64,10 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
           ]);
           return !skip.has(t.topic) && t.topic.length < 40;
         }).slice(0, 30);
+
+        for (var i = 0; i < topics.length; i++) {
+          totalCountByTopic[topics[i].topic] = topics[i].count;
+        }
 
         var html = '<div class="topic-grid">';
         for (var i = 0; i < topics.length; i++) {
@@ -94,9 +100,11 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
             fetch(API + "/popular?topic=" + encodeURIComponent(topic) + "&limit=10")
               .then(function (res) { return res.json(); })
               .then(function (data) {
+                var total = totalCountByTopic[topic] || 0;
+                var shown = Math.min(10, data.repos.length);
                 var titleHtml =
                   '<p class="section-label" style="margin-top: 1rem;">' +
-                  'popular <strong>' + topic + '</strong> repos &nbsp;' +
+                  'showing ' + shown + ' of ' + total + ' <strong>' + topic + '</strong> repos &nbsp;' +
                   '<a href="/repo/' + (data.repos[0]?.full_name || '') + '" ' +
                   'class="btn btn-outline" style="display:inline-block;font-size:0.75rem;">' +
                   'recommend from top</a>' +

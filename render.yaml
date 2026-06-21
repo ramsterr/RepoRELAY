@@ -1,12 +1,12 @@
 services:
   - type: web
     name: reporelay-mvp-api
-    runtime: python
+    runtime: docker
     plan: free
-    buildCommand: pip install uv && uv sync --frozen
-    startCommand: uv run --package reporelay-mvp-api uvicorn reporelay_mvp_api.main:app --host 0.0.0.0 --port $PORT
+    dockerfilePath: ./Dockerfile.api
+    dockerContext: .
     envVars:
       - key: DATABASE_URL
         sync: false
-      - key: PYTHON_VERSION
-        value: 3.12
+      - key: PORT
+        value: "8000"

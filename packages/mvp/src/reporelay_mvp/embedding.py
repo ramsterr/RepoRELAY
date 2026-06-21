@@ -9,39 +9,53 @@ recommended for all cosine-similarity use cases).
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 import time
 from typing import Any
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 _model: Any = None
-_cached_dim: int | None = None
+_model_lock = threading.Lock()
+DIMENSION = 384
 
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
 
 
-def _get_model() -> Any:
-    global _model, _cached_dim
-    if _model is None:
+def _load_model() -> Any:
+    global _model
+    if _model is not None:
+        return _model
+    with _model_lock:
+        if _model is not None:
+            return _model
         from sentence_transformers import SentenceTransformer
 
         logger.info("loading embedding model %s ...", MODEL_NAME)
         start = time.monotonic()
         _model = SentenceTransformer(MODEL_NAME)
-        _cached_dim = _model.get_embedding_dimension()
         logger.info(
-            "model loaded in %.1fs (dim=%d)", time.monotonic() - start, _cached_dim
+            "model loaded in %.1fs (dim=%d)", time.monotonic() - start, DIMENSION
         )
     return _model
 
 
-def embed_text(text_value: str) -> list[float]:
+async def preloadModel() -> None:
+    await asyncio.to_thread(_load_model)
+    logger.info("embedding model preloaded and ready")
+
+
+async def embed_text(text_value: str) -> list[float]:
     """Compute a 384-dim embedding for a piece of text. Returns zeros for empty input."""
     if not text_value or not text_value.strip():
-        return [0.0] * 384
-    model = _get_model()
-    vector = model.encode(
+        return [0.0] * DIMENSION
+    model = _load_model()
+    vector = await asyncio.to_thread(
+        model.encode,
         text_value,
         show_progress_bar=False,
         normalize_embeddings=True,
@@ -51,11 +65,26 @@ def embed_text(text_value: str) -> list[float]:
 
 def cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity between two L2-normalized vectors. Returns 0 for zero vectors."""
-    if len(a) != len(b) or not a or not b:
+    if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    norm_a = (sum(x * x for x in a)) ** 0.5
-    norm_b = (sum(x * x for x in b)) ** 0.5
+    na = np.asarray(a, dtype=np.float32)
+    nb = np.asarray(b, dtype=np.float32)
+    dot = float(np.dot(na, nb))
+    norm_a = float(np.linalg.norm(na))
+    norm_b = float(np.linalg.norm(nb))
     if norm_a < 1e-9 or norm_b < 1e-9:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+def cosine_batch_one_vs_many(one: list[float], many: list[list[float]]) -> list[float]:
+    """Vectorized cosine similarity: one vector against N vectors."""
+    if not many:
+        return []
+    n = np.asarray(many, dtype=np.float32)
+    o = np.asarray(one, dtype=np.float32)
+    dot = n @ o
+    norms = np.linalg.norm(n, axis=1) * float(np.linalg.norm(o))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result = np.where(norms > 1e-9, dot / norms, 0.0)
+    return result.tolist()

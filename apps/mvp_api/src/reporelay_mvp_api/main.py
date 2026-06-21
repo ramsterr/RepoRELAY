@@ -11,7 +11,9 @@ Endpoints:
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -25,6 +27,14 @@ from reporelay_mvp import recommend_random as explore_fn
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    from reporelay_mvp.embedding import preloadModel
+
+    await preloadModel()
+    yield
 
 
 class ScoredRepoOut(BaseModel):
@@ -54,6 +64,7 @@ app = FastAPI(
     title="RepoRelay MVP",
     version="0.1.0",
     description="Single-source GitHub repo recommender (5-stage pipeline, no graph/Redis).",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -62,8 +73,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-import os
 
 app.state.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 
@@ -201,7 +210,7 @@ async def recommend(
 
     return RecommendResponse(
         source_repo=rec.source_repo,
-        repos=[ScoredRepoOut(**r.model_dump()) for r in rec.repos],
+        repos=[ScoredRepoOut(**{k: v for k, v in r.model_dump().items() if k != "dependencies"}) for r in rec.repos],
     )
 
 
@@ -220,5 +229,5 @@ async def explore(
 
     return RecommendResponse(
         source_repo=rec.source_repo,
-        repos=[ScoredRepoOut(**r.model_dump()) for r in rec.repos],
+        repos=[ScoredRepoOut(**{k: v for k, v in r.model_dump().items() if k != "dependencies"}) for r in rec.repos],
     )

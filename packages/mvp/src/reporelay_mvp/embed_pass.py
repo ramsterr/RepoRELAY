@@ -53,7 +53,7 @@ async def _embed_one(
         logger.info("  %s/%s: empty readme, skipping", owner, name)
         return False
     try:
-        embedding = embed_text(readme[:8000])
+        embedding = await embed_text(readme[:8000])
     except Exception as exc:
         logger.warning("embedding failed for %s/%s: %s", owner, name, exc)
         return False

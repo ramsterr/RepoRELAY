@@ -55,6 +55,8 @@ async def upsert_repo(
     stars: int,
     dependencies: list[str],
 ) -> None:
+    if language and language.lower() not in (t.lower() for t in topics):
+        topics = [*topics, language]
     await session.execute(
         text(
             """
@@ -109,6 +111,10 @@ async def bulk_upsert_from_search(
         return 0
     params: list[dict[str, Any]] = []
     for item in items:
+        lang = item.get("language")
+        topics = list(item.get("topics") or [])
+        if lang and lang.lower() not in (t.lower() for t in topics):
+            topics.append(lang)
         params.append(
             {
                 "id": int(item["id"]),
@@ -116,8 +122,8 @@ async def bulk_upsert_from_search(
                 "name": item["name"],
                 "full_name": item["full_name"],
                 "description": item.get("description"),
-                "language": item.get("language"),
-                "topics": list(item.get("topics") or []),
+                "language": lang,
+                "topics": topics,
                 "stars": int(item.get("stargazers_count") or 0),
             }
         )

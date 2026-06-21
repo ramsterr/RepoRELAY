@@ -25,7 +25,7 @@ import random
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from reporelay_mvp import data
-from reporelay_mvp.embedding import cosine
+from reporelay_mvp.embedding import cosine_batch_one_vs_many
 from reporelay_mvp.features import compute_features
 from reporelay_mvp.models import Features, Repo
 
@@ -97,18 +97,22 @@ async def score_many(
     rng = random.Random(seed) if seed is not None else None
 
     embeddings: dict[int, list[float]] = {}
+    fc_by_id: dict[int, float] = {}
     if filter_embedding:
         candidate_ids = [c.id for c, _ in candidates]
         if candidate_ids:
             embeddings = await data.get_embeddings_batch(session, candidate_ids)
-        if not embeddings:
+        if embeddings:
+            ids_ordered = [c.id for c, _ in candidates if c.id in embeddings]
+            vecs_ordered = [embeddings[cid] for cid in ids_ordered]
+            scores = cosine_batch_one_vs_many(filter_embedding, vecs_ordered)
+            fc_by_id = dict(zip(ids_ordered, scores, strict=True))
+        else:
             logger.info("no candidate embeddings for semantic tag filter — falling back to topic overlap")
 
     scored: list[tuple[Repo, float, Features]] = []
     for cand, cosine_sim in candidates:
-        fc = 0.0
-        if filter_embedding and cand.id in embeddings:
-            fc = cosine(filter_embedding, embeddings[cand.id])
+        fc = fc_by_id.get(cand.id, 0.0)
         features = compute_features(
             source, cand, cosine_sim=cosine_sim, filter_cosine_sim=fc
         )

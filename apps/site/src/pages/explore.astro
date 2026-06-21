@@ -22,6 +22,33 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 
 <script is:inline define:vars={{ API }}>
 
+  var _fc = {};
+  function cachedFetch(url) {
+    var now = Date.now();
+    if (_fc[url] && now - _fc[url].ts < 300000) {
+      return Promise.resolve(_fc[url].data);
+    }
+    try {
+      var sc = sessionStorage.getItem("rr:" + url);
+      if (sc) {
+        var parsed = JSON.parse(sc);
+        if (now - parsed.ts < 300000) {
+          _fc[url] = parsed;
+          return Promise.resolve(parsed.data);
+        }
+      }
+    } catch (e) {}
+    return fetch(url).then(function (res) {
+      if (!res.ok) return res;
+      return res.clone().json().then(function (data) {
+        var entry = { data: data, ts: now };
+        _fc[url] = entry;
+        try { sessionStorage.setItem("rr:" + url, JSON.stringify(entry)); } catch (e) {}
+        return data;
+      });
+    });
+  }
+
   function fmt(n) {
     if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
     return String(n);
@@ -50,8 +77,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     if (!el) return;
     el.innerHTML = '<div class="loading">loading topics…</div>';
 
-    fetch(API + "/topics?limit=40")
-      .then(function (res) { return res.json(); })
+    cachedFetch(API + "/topics?limit=40")
       .then(function (data) {
         var topics = (data.topics || []).filter(function (t) {
           // skip overly broad or spammy tags
@@ -97,8 +123,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
             }
             this.classList.add("active");
 
-            fetch(API + "/popular?topic=" + encodeURIComponent(topic) + "&limit=10")
-              .then(function (res) { return res.json(); })
+            cachedFetch(API + "/popular?topic=" + encodeURIComponent(topic) + "&limit=10")
               .then(function (data) {
                 var total = totalCountByTopic[topic] || 0;
                 var shown = Math.min(10, data.repos.length);
@@ -129,8 +154,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 
   function exploreRandom() {
     var seed = Math.floor(Math.random() * 99999);
-    fetch(API + "/explore?seed=" + seed + "&limit=1")
-      .then(function (res) { return res.json(); })
+    cachedFetch(API + "/explore?seed=" + seed + "&limit=1")
       .then(function (data) {
         window.location.href = "/repo/" + data.source_repo;
       })

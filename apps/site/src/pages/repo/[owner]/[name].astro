@@ -41,6 +41,33 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 </Base>
 
 <script define:vars={{ API, repo }}>
+  var _fc = {};
+  function cachedFetch(url) {
+    var now = Date.now();
+    if (_fc[url] && now - _fc[url].ts < 300000) {
+      return Promise.resolve(_fc[url].data);
+    }
+    try {
+      var sc = sessionStorage.getItem("rr:" + url);
+      if (sc) {
+        var parsed = JSON.parse(sc);
+        if (now - parsed.ts < 300000) {
+          _fc[url] = parsed;
+          return Promise.resolve(parsed.data);
+        }
+      }
+    } catch (e) {}
+    return fetch(url).then(function (res) {
+      if (!res.ok) return res;
+      return res.clone().json().then(function (data) {
+        var entry = { data: data, ts: now };
+        _fc[url] = entry;
+        try { sessionStorage.setItem("rr:" + url, JSON.stringify(entry)); } catch (e) {}
+        return data;
+      });
+    });
+  }
+
   var currentSeed = (function () {
     var s = new URLSearchParams(window.location.search).get("seed");
     return s ? parseInt(s) : undefined;
@@ -125,11 +152,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     if (currentSeed !== undefined) params += "&seed=" + currentSeed;
     if (currentTags.length > 0) params += "&tags=" + encodeURIComponent(currentTags.join(","));
 
-    fetch(API + "/recommend?" + params)
-      .then(function (res) {
-        if (!res.ok) throw new Error("API error " + res.status);
-        return res.json();
-      })
+    cachedFetch(API + "/recommend?" + params)
       .then(function (data) {
         var repos = data.repos || [];
         headerEl.textContent = repos.length + " recommendations" + (currentSeed !== undefined ? " (seed: " + currentSeed + ")" : "");

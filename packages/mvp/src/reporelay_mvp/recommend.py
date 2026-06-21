@@ -21,6 +21,7 @@ pipeline against it — the "surprise me / explore" feature.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from reporelay_mvp import data
@@ -41,6 +42,24 @@ from reporelay_mvp.settings import get_mvp_settings
 logger = logging.getLogger(__name__)
 
 SEARCH_LIMIT = 100  # how many fresh candidates to pull from GitHub per call
+
+_cached_search_results: dict[str, tuple[float, Any]] = {}
+_CACHE_TTL = 300
+
+
+async def _cached_search(
+    client: Any, *, topics: list[str] | None, language: str | None, **kwargs: Any
+) -> dict[str, Any]:
+    key = repr((language, tuple(sorted(topics or []))))
+    now = time.monotonic()
+    if key in _cached_search_results:
+        ts, cached = _cached_search_results[key]
+        if now - ts < _CACHE_TTL:
+            logger.info("search cache hit for %s", key)
+            return cached
+    result = await search_repositories(client, topics=topics, language=language, **kwargs)
+    _cached_search_results[key] = (now, result)
+    return result
 
 
 def _build_scored_repo(
@@ -104,11 +123,12 @@ async def recommend(
         if tags:
             filter_text = " ".join(tags)
             logger.info("embedding filter text: %r", filter_text)
-            filter_emb = embed_text(filter_text)
+            filter_emb = await embed_text(filter_text)
 
         scored = await score_many(source, candidates, session=session, seed=seed, tags=tags, filter_embedding=filter_emb)
         final = rerank(source, scored, limit=limit, seed=seed)
 
+        _build_cosine_lookup(candidates)
         scored_repos: list[ScoredRepo] = []
         for repo, sc, features in final:
             cosine_sim = _find_cosine(repo, candidates)
@@ -148,7 +168,7 @@ async def _expand_pool(
     search_items: list[dict[str, Any]] = []
     try:
         async with _auth_client(settings.github_token) as client:
-            payload = await search_repositories(
+            payload = await _cached_search(
                 client,
                 topics=source.topics or None,
                 language=source.language,
@@ -209,6 +229,7 @@ async def recommend_random(
         scored = await score_many(source, candidates, session=session, seed=seed)
         final = rerank(source, scored, limit=limit, seed=seed)
 
+        _build_cosine_lookup(candidates)
         scored_repos: list[ScoredRepo] = []
         for repo, sc, features in final:
             cosine_sim = _find_cosine(repo, candidates)
@@ -219,11 +240,17 @@ async def recommend_random(
         await session.close()
 
 
+_cosine_lookup: dict[int, float] = {}
+
+
+def _build_cosine_lookup(candidates: list[tuple[Any, float]]) -> dict[int, float]:
+    global _cosine_lookup
+    _cosine_lookup = {cand.id: sim for cand, sim in candidates}
+    return _cosine_lookup
+
+
 def _find_cosine(repo: Any, candidates: list[tuple[Any, float]]) -> float:
-    for cand, sim in candidates:
-        if cand.id == repo.id:
-            return sim
-    return 0.5
+    return _cosine_lookup.get(repo.id, 0.5)
 
 
 async def recommend_dict(

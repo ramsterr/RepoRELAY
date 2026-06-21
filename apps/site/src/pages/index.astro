@@ -40,10 +40,36 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 
 <script define:vars={{ API }}>
 
+  var _fc = {};
+  function cachedFetch(url) {
+    var now = Date.now();
+    if (_fc[url] && now - _fc[url].ts < 300000) {
+      return Promise.resolve(_fc[url].data);
+    }
+    try {
+      var sc = sessionStorage.getItem("rr:" + url);
+      if (sc) {
+        var parsed = JSON.parse(sc);
+        if (now - parsed.ts < 300000) {
+          _fc[url] = parsed;
+          return Promise.resolve(parsed.data);
+        }
+      }
+    } catch (e) {}
+    return fetch(url).then(function (res) {
+      if (!res.ok) return res;
+      return res.clone().json().then(function (data) {
+        var entry = { data: data, ts: now };
+        _fc[url] = entry;
+        try { sessionStorage.setItem("rr:" + url, JSON.stringify(entry)); } catch (e) {}
+        return data;
+      });
+    });
+  }
+
   var el = document.getElementById("popular-repos");
   if (el) {
-    fetch(API + "/popular?limit=8")
-      .then(function (res) { return res.json(); })
+    cachedFetch(API + "/popular?limit=8")
       .then(function (data) {
         var repos = data.repos || [];
         var html = "";

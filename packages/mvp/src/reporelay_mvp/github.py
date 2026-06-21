@@ -290,7 +290,7 @@ async def save_repo(owner: str, name: str) -> int:
                 dependencies=deps,
             )
             if readme.strip():
-                embedding = embed_text(readme[:8000])
+                embedding = await embed_text(readme[:8000])
                 await data.set_embedding(session, repo_id=repo_id, embedding=embedding)
             await session.commit()
         finally:

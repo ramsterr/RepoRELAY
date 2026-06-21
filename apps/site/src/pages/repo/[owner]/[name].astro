@@ -1,47 +1,9 @@
 ---
 import Base from "../../../layouts/Base.astro";
-import {
-  fetchRecommendations,
-  type RecommendResponse,
-} from "../../../lib/api";
 
 const { owner, name } = Astro.params;
 const repo = `${owner}/${name}`;
-const seedParam = Astro.url.searchParams.get("seed");
-const seed = seedParam ? parseInt(seedParam) : undefined;
-const tagsParam = Astro.url.searchParams.get("tags");
-const tags = tagsParam ? tagsParam.split(",").map(t => t.trim()).filter(Boolean) : undefined;
-
-let data: RecommendResponse | null = null;
-let error: string | null = null;
-
-try {
-  data = await fetchRecommendations(repo, 12, seed, tags);
-} catch (e) {
-  error = e instanceof Error ? e.message : "failed to load";
-}
-
-function fmt(n: number): string {
-  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
-  return String(n);
-}
-
-function scoreColor(score: number): string {
-  if (score >= 0.7) return "high";
-  if (score >= 0.4) return "medium";
-  return "low";
-}
-
-function matchLabel(features: Record<string, number>): string {
-  const parts: string[] = [];
-  if (features.language_match >= 1) parts.push("same language");
-  if (features.topic_overlap > 0.3) parts.push("shared topics");
-  if (features.cosine_sim > 0.6) parts.push("similar README");
-  if (features.filter_cosine_sim > 0.5) parts.push("semantic match");
-  if (features.dep_overlap > 0.3) parts.push("shared deps");
-  if (parts.length === 0) return "loose match";
-  return parts.slice(0, 2).join(" + ");
-}
+const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 ---
 
 <Base>
@@ -60,151 +22,189 @@ function matchLabel(features: Record<string, number>): string {
     <button type="button" id="apply-tags" class="btn btn-outline" style="font-size:0.75rem;padding:0.3rem 0.7rem;">
       apply
     </button>
-    {
-      tags && tags.length > 0 && (
-        <div class="active-filters">
-          {tags.map(t => (
-            <span class="filter-chip">
-              {t}
-              <button
-                type="button"
-                class="remove-filter"
-                data-tag={t}
-                style="background:none;border:none;color:inherit;cursor:pointer;margin-left:4px;font-size:0.8rem;"
-              >×</button>
-            </span>
-          ))}
-        </div>
-      )
-    }
+    <div class="active-filters" id="active-filters"></div>
   </div>
 
-  {tags && tags.length > 0 && (
-    <p class="section-label" style="margin-top:0.3rem;">
-      active filters: {tags.map(t => <span class="badge" style="background:#e8f5e9;border-color:#c8e6c9;color:#2e7d32;font-size:0.75rem;">{t}</span>)}
-    </p>
-  )}
+  <p class="section-label" id="results-header" style="margin-top:0.3rem;">
+    <span id="results-label">loading…</span>
+  </p>
 
-  {
-    error ? (
-      <div class="error">
-        {error}
-        <br />
-        <small>make sure the API is reachable</small>
-      </div>
-    ) : (
-      <>
-        <p class="section-label">
-          {data?.repos.length ?? 0} recommendations
-          {seed !== undefined && <span style="opacity:0.5"> (seed: {seed})</span>}
-        </p>
+  <div class="actions">
+    <button class="btn btn-outline" id="reroll-btn">
+      rerun with new seed
+    </button>
+  </div>
 
-        <div class="actions">
-          <button class="btn btn-outline" id="reroll-btn">
-            rerun with new seed
-          </button>
-        </div>
-
-        <div id="results">
-          {data?.repos.map((r) => (
-            <div class="card">
-              <div class="card-top">
-                <a
-                  class="card-repo"
-                  href={`https://github.com/${r.full_name}`}
-                  target="_blank"
-                  rel="noopener"
-                >
-                  {r.full_name}
-                </a>
-                <span class="stars">{fmt(r.stars)} ★</span>
-              </div>
-              <div class="card-desc">
-                {r.description || "(no description)"}
-              </div>
-              <div class="card-meta">
-                <span class={`score-dot ${scoreColor(r.score)}`} />
-                <span class="badge badge-lang" style="font-size:0.65rem;">
-                  {matchLabel(r.features)}
-                </span>
-                {r.shared_language && (
-                  <span class="badge badge-lang" style="background:#e8f5e9;border-color:#c8e6c9;color:#2e7d32;">
-                    {r.language}
-                  </span>
-                )}
-                {r.shared_topics.length > 0 && (
-                  <span class="badge" style="background:#e3f2fd;border-color:#bbdefb;color:#1565c0;">
-                    {r.shared_topics.join(", ")}
-                  </span>
-                )}
-                {r.language && !r.shared_language && (
-                  <span class="badge badge-lang">{r.language}</span>
-                )}
-                {r.topics
-                  .filter((t) => !r.shared_topics.includes(t))
-                  .slice(0, 3)
-                  .map((t) => (
-                    <span class="pill">{t}</span>
-                  ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </>
-    )
-  }
+  <div id="results">
+    <div class="loading">searching for similar repos…</div>
+  </div>
 </Base>
 
-<script is:inline>
-  function getTags() {
+<script define:vars={{ API, repo }}>
+  var currentSeed = (function () {
+    var s = new URLSearchParams(window.location.search).get("seed");
+    return s ? parseInt(s) : undefined;
+  })();
+  var currentTags = (function () {
     var raw = new URLSearchParams(window.location.search).get("tags");
     return raw ? raw.split(",").map(function (t) { return t.trim(); }).filter(Boolean) : [];
+  })();
+
+  if (currentTags.length > 0) {
+    var chipHtml = "";
+    for (var i = 0; i < currentTags.length; i++) {
+      chipHtml +=
+        '<span class="filter-chip">' +
+        currentTags[i] +
+        '<button type="button" class="remove-filter" data-tag="' + currentTags[i] + '" style="background:none;border:none;color:inherit;cursor:pointer;margin-left:4px;font-size:0.8rem;">\u00d7</button>' +
+        '</span>';
+    }
+    document.getElementById("active-filters").innerHTML = chipHtml;
+    document.getElementById("results-label").textContent = "active filters:";
   }
 
-  function navigateWithTags(newTags) {
-    var parts = [window.location.pathname];
-    if (newTags.length > 0) parts.push("?tags=" + encodeURIComponent(newTags.join(",")));
-    var seed = new URLSearchParams(window.location.search).get("seed");
-    if (seed) parts.push(parts.length > 1 ? "&seed=" + seed : "?seed=" + seed);
-    window.location.href = parts.join("");
+  function fmt(n) {
+    if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return String(n);
   }
+
+  function scoreColor(score) {
+    if (score >= 0.7) return "high";
+    if (score >= 0.4) return "medium";
+    return "low";
+  }
+
+  function matchLabel(features) {
+    var parts = [];
+    if (features.language_match >= 1) parts.push("same language");
+    if (features.topic_overlap > 0.3) parts.push("shared topics");
+    if (features.cosine_sim > 0.6) parts.push("similar README");
+    if (features.filter_cosine_sim > 0.5) parts.push("semantic match");
+    if (features.dep_overlap > 0.3) parts.push("shared deps");
+    if (parts.length === 0) return "loose match";
+    return parts.slice(0, 2).join(" + ");
+  }
+
+  function renderResults(repos) {
+    var html = "";
+    for (var i = 0; i < repos.length; i++) {
+      var r = repos[i];
+      var otherTopics = (r.topics || []).filter(function (t) { return (r.shared_topics || []).indexOf(t) === -1; }).slice(0, 3);
+      html +=
+        '<div class="card">' +
+        '<div class="card-top">' +
+        '<a class="card-repo" href="https://github.com/' + r.full_name + '" target="_blank" rel="noopener">' + r.full_name + '</a>' +
+        '<span class="stars">' + fmt(r.stars) + ' \u2605</span>' +
+        '</div>' +
+        '<div class="card-desc">' + (r.description || "(no description)") + '</div>' +
+        '<div class="card-meta">' +
+        '<span class="score-dot ' + scoreColor(r.score) + '"></span>' +
+        '<span class="badge badge-lang" style="font-size:0.65rem;">' + matchLabel(r.features) + '</span>';
+      if (r.shared_language) {
+        html += '<span class="badge badge-lang" style="background:#e8f5e9;border-color:#c8e6c9;color:#2e7d32;">' + r.language + '</span>';
+      }
+      if (r.shared_topics && r.shared_topics.length > 0) {
+        html += '<span class="badge" style="background:#e3f2fd;border-color:#bbdefb;color:#1565c0;">' + r.shared_topics.join(", ") + '</span>';
+      }
+      if (r.language && !r.shared_language) {
+        html += '<span class="badge badge-lang">' + r.language + '</span>';
+      }
+      for (var j = 0; j < otherTopics.length; j++) {
+        html += '<span class="pill">' + otherTopics[j] + '</span>';
+      }
+      html += '</div></div>';
+    }
+    return html;
+  }
+
+  function loadRecommendations() {
+    var resultsEl = document.getElementById("results");
+    var headerEl = document.getElementById("results-label");
+
+    var params = "repo=" + encodeURIComponent(repo) + "&limit=12";
+    if (currentSeed !== undefined) params += "&seed=" + currentSeed;
+    if (currentTags.length > 0) params += "&tags=" + encodeURIComponent(currentTags.join(","));
+
+    fetch(API + "/recommend?" + params)
+      .then(function (res) {
+        if (!res.ok) throw new Error("API error " + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        var repos = data.repos || [];
+        headerEl.textContent = repos.length + " recommendations" + (currentSeed !== undefined ? " (seed: " + currentSeed + ")" : "");
+        resultsEl.innerHTML = renderResults(repos);
+      })
+      .catch(function (e) {
+        var msg = e.message || "failed to load";
+        resultsEl.innerHTML = '<div class="error">' + msg + '<br><small>make sure the API is reachable</small></div>';
+      });
+  }
+
+  loadRecommendations();
 
   function addTag(tag) {
     tag = tag.trim().toLowerCase();
     if (!tag) return;
-    var tags = getTags();
-    if (tags.indexOf(tag) === -1) tags.push(tag);
-    navigateWithTags(tags);
+    if (currentTags.indexOf(tag) === -1) {
+      currentTags.push(tag);
+      updateTagChips();
+      loadRecommendations();
+    }
   }
 
   function removeTag(tag) {
-    var tags = getTags().filter(function (t) { return t !== tag; });
-    navigateWithTags(tags);
+    currentTags = currentTags.filter(function (t) { return t !== tag; });
+    updateTagChips();
+    loadRecommendations();
   }
 
-  var addInput = document.getElementById("add-tag");
-  var applyBtn = document.getElementById("apply-tags");
-
-  if (addInput && applyBtn) {
-    applyBtn.addEventListener("click", function () { addTag(addInput.value); addInput.value = ""; });
-    addInput.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") { e.preventDefault(); addTag(addInput.value); addInput.value = ""; }
-    });
+  function updateTagChips() {
+    var el = document.getElementById("active-filters");
+    if (currentTags.length === 0) {
+      el.innerHTML = "";
+      document.getElementById("results-label").textContent = "";
+      return;
+    }
+    document.getElementById("results-label").textContent = "active filters:";
+    var html = "";
+    for (var i = 0; i < currentTags.length; i++) {
+      html +=
+        '<span class="filter-chip">' + currentTags[i] +
+        '<button type="button" class="remove-filter" data-tag="' + currentTags[i] + '" style="background:none;border:none;color:inherit;cursor:pointer;margin-left:4px;font-size:0.8rem;">\u00d7</button>' +
+        '</span>';
+    }
+    el.innerHTML = html;
+    bindRemoveHandlers();
   }
 
-  var removeButtons = document.querySelectorAll(".remove-filter");
-  for (var i = 0; i < removeButtons.length; i++) {
-    removeButtons[i].addEventListener("click", function () {
-      removeTag(this.getAttribute("data-tag"));
-    });
+  function bindRemoveHandlers() {
+    var btns = document.querySelectorAll(".remove-filter");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].onclick = function () {
+        removeTag(this.getAttribute("data-tag"));
+      };
+    }
   }
 
-  document.getElementById("reroll-btn")?.addEventListener("click", function () {
-    var seed = Math.floor(Math.random() * 99999);
-    var tags = getTags();
-    var url = window.location.pathname + "?seed=" + seed;
-    if (tags.length > 0) url += "&tags=" + encodeURIComponent(tags.join(","));
-    window.location.href = url;
+  bindRemoveHandlers();
+
+  document.getElementById("apply-tags").addEventListener("click", function () {
+    var input = document.getElementById("add-tag");
+    addTag(input.value);
+    input.value = "";
+  });
+  document.getElementById("add-tag").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addTag(this.value);
+      this.value = "";
+    }
+  });
+
+  document.getElementById("reroll-btn").addEventListener("click", function () {
+    currentSeed = Math.floor(Math.random() * 99999);
+    loadRecommendations();
   });
 </script>
 
@@ -251,5 +251,10 @@ function matchLabel(features: Record<string, number>): string {
     border-radius: 3px;
     font-size: 0.75rem;
     color: var(--accent, #58a6ff);
+  }
+
+  .loading {
+    padding: 1rem 0;
+    opacity: 0.5;
   }
 </style>

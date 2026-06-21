@@ -57,7 +57,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
       }
     } catch (e) {}
     return fetch(url).then(function (res) {
-      if (!res.ok) return res;
+      if (!res.ok) throw new Error("API " + res.status);
       return res.clone().json().then(function (data) {
         var entry = { data: data, ts: now };
         _fc[url] = entry;

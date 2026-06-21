@@ -1,0 +1,14 @@
+name: keepalive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -sf -o /dev/null https://reporelay-mvp-api-0w1k.onrender.com/health
+          curl -sf -o /dev/null https://reporelay-mvp-api-0w1k.onrender.com/popular?limit=1

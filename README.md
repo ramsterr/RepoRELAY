@@ -78,6 +78,11 @@ just mvp count                   # how many repos in the DB
 
 ## How it works
 
+```
+GitHub API ──► Postgres + pgvector ──► Candidates ──► Score ──► Rerank ──► Results
+  (fetch)        (store + ANN)        (200-300)     (ranked)   (diverse)    (top N)
+```
+
 1. **Fetch** — repo metadata + README from GitHub API
 2. **Embed** — README → 384-dim vector via `BAAI/bge-small-en-v1.5`
 3. **Candidates** — SQL filter (language/topics) + pgvector ANN search

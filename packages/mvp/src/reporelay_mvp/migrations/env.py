@@ -15,6 +15,8 @@ target_metadata = None
 def _resolve_url() -> str:
     env_url = os.environ.get("DATABASE_URL")
     if env_url:
+        if env_url.startswith("postgresql://"):
+            return "postgresql+psycopg://" + env_url[len("postgresql://") :]
         return env_url
     return config.get_main_option("sqlalchemy.url") or ""
 

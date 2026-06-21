@@ -1,5 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
+
+const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 ---
 
 <Base>
@@ -18,8 +20,7 @@ import Base from "../layouts/Base.astro";
   </div>
 </Base>
 
-<script is:inline>
-  var API = "http://localhost:8001";
+<script is:inline define:vars={{ API }}>
 
   function fmt(n) {
     if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
@@ -96,7 +97,7 @@ import Base from "../layouts/Base.astro";
                 var titleHtml =
                   '<p class="section-label" style="margin-top: 1rem;">' +
                   'popular <strong>' + topic + '</strong> repos &nbsp;' +
-                  '<a href="/repo/' + encodeURIComponent(data.repos[0]?.full_name || '') + '" ' +
+                  '<a href="/repo/' + (data.repos[0]?.full_name || '') + '" ' +
                   'class="btn btn-outline" style="display:inline-block;font-size:0.75rem;">' +
                   'recommend from top</a>' +
                   '</p>';
@@ -109,7 +110,7 @@ import Base from "../layouts/Base.astro";
         }
       })
       .catch(function () {
-        el.innerHTML = '<div class="error">failed to load topics — make sure the API is running on port 8001</div>';
+        el.innerHTML = '<div class="error">failed to load topics — API is unreachable</div>';
       });
   }
 

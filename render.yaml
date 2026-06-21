@@ -2,10 +2,9 @@ services:
   - type: web
     name: reporelay-mvp-api
     runtime: python
-    rootDir: apps/mvp_api
     plan: free
-    buildCommand: cd ../.. && uv sync
-    startCommand: cd ../.. && uv run --package reporelay-mvp-api uvicorn reporelay_mvp_api.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: uv sync --frozen
+    startCommand: uv run --package reporelay-mvp-api uvicorn reporelay_mvp_api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
         sync: false

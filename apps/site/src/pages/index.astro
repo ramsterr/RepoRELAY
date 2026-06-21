@@ -58,7 +58,12 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     } catch (e) {}
     return fetch(url).then(function (res) {
       if (!res.ok) throw new Error("API " + res.status);
-      return res.clone().json().then(function (data) {
+      return res.text().then(function (text) {
+        try {
+          var data = JSON.parse(text);
+        } catch (e) {
+          throw new Error("API returned non-JSON");
+        }
         var entry = { data: data, ts: now };
         _fc[url] = entry;
         try { sessionStorage.setItem("rr:" + url, JSON.stringify(entry)); } catch (e) {}

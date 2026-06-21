@@ -31,9 +31,12 @@ logger = logging.getLogger(__name__)
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+
     from reporelay_mvp.embedding import preloadModel
 
-    await preloadModel()
+    asyncio.create_task(preloadModel())
+    logger.info("model preloading in background — server ready")
     yield
 
 

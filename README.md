@@ -38,9 +38,7 @@ Live: **[reporelay-site.vercel.app](https://reporelay-site.vercel.app)** (fronte
 
   
 - **explore topics**
-  <img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/a3f96b5e-ecd5-430c-9f5a-bac87ae6f995" />
-
-
+  
 **[→ Architecture & data flow](ARCHITECTURE.md)** · **[→ Deploy notes](DEPLOY.md)**
 
 ---

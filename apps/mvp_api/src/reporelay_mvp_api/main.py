@@ -14,9 +14,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import threading
-import time
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,15 +27,6 @@ from reporelay_mvp import recommend_random as explore_fn
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ── recommendation cache ────────────────────────────────────────────
-# Simple TTL cache so repeated requests (including the keepalive
-# cron) don't re-run the full pipeline. Caps at _CACHE_MAX entries
-# to stay within Render free-tier memory.
-_cache: dict[str, tuple[float, Any]] = {}
-_cache_lock = threading.Lock()
-_CACHE_TTL = 300  # 5 minutes
-_CACHE_MAX = 1000
 
 
 @contextlib.asynccontextmanager
@@ -214,14 +203,6 @@ async def recommend(
     if tags:
         tag_list = [t.strip().lower() for t in tags.split(",") if t.strip()]
 
-    cache_key = repr((repo, limit, seed, tag_list))
-    now = time.time()
-    with _cache_lock:
-        cached = _cache.get(cache_key)
-        if cached and (now - cached[0]) < _CACHE_TTL:
-            logger.info("cache hit for %s", repo)
-            return cached[1]
-
     try:
         rec = await recommend_fn(repo, limit=limit, seed=seed, tags=tag_list)
     except LookupError as exc:
@@ -230,16 +211,10 @@ async def recommend(
         logger.exception("recommend failed for %s", repo)
         raise HTTPException(status_code=500, detail="internal error") from exc
 
-    resp = RecommendResponse(
+    return RecommendResponse(
         source_repo=rec.source_repo,
         repos=[ScoredRepoOut(**{k: v for k, v in r.model_dump().items() if k != "dependencies"}) for r in rec.repos],
     )
-
-    with _cache_lock:
-        if len(_cache) < _CACHE_MAX:
-            _cache[cache_key] = (now, resp)
-
-    return resp
 
 
 @app.get("/explore", response_model=RecommendResponse)

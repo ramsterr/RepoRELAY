@@ -4,7 +4,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
     HF_HOME=/app/.cache/huggingface \
-    SENTENCE_TRANSFORMERS_HOME=/app/.cache/huggingface
+    SENTENCE_TRANSFORMERS_HOME=/app/.cache/huggingface \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    PYTORCH_NO_CUDA_MEMORY_CACHING=1
 
 RUN pip install --no-cache-dir uv
 

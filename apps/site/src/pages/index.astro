@@ -153,18 +153,15 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 
   var trendingEl = document.getElementById("trending-grid");
   if (trendingEl) {
-    cachedFetchWithRetry(API + "/popular?limit=24", {
+    cachedFetchWithRetry(API + "/trending?limit=8", {
       onSlow: function () {
         trendingEl.innerHTML = '<div class="loading" style="grid-column: 1 / -1;">still loading…</div>';
       },
     })
       .then(function (data) {
-        var repos = (data.repos || []).slice();
-        repos.sort(function (a, b) { return (b.trending_score || 0) - (a.trending_score || 0); });
-        repos = repos.filter(function (r) { return (r.trending_score || 0) > 0; });
-        repos = repos.slice(0, 8);
+        var repos = data.repos || [];
         if (repos.length === 0) {
-          trendingEl.innerHTML = '<div class="loading" style="grid-column: 1 / -1;">no trending repos yet</div>';
+          trendingEl.innerHTML = '<div class="loading" style="grid-column: 1 / -1;">no trending repos right now</div>';
           return;
         }
         var html = "";
@@ -174,11 +171,12 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
           html += '<a class="trending-card" href="/repo?repo=' + encodeURIComponent(r.full_name) + '">';
           html += '<div class="trending-card-top">';
           html += '<span class="trending-card-name">' + escapeHtml(r.full_name) + '</span>';
-          html += '<span class="trending-card-stars">' + fmtStars(r.stars) + ' ★</span>';
+          html += '<span class="trending-card-stars">' + fmtStars(r.total_stars) + ' ★</span>';
           html += '</div>';
           html += '<div class="trending-card-desc">' + desc + '</div>';
           html += '<div class="trending-card-meta">';
           if (r.language) html += '<span class="badge badge-lang">' + escapeHtml(r.language) + '</span>';
+          if (r.stars_today > 0) html += '<span class="badge badge-trending">&nearr; ' + fmtStars(r.stars_today) + ' / ' + (r.stars_today >= 150 ? 'wk' : 'day') + '</span>';
           html += '</div>';
           html += '</a>';
         }

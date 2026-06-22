@@ -14,8 +14,10 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import time as _time_mod
 from typing import Literal
 
+import httpx as _httpx_mod
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -24,6 +26,7 @@ from sqlalchemy import text
 from reporelay_mvp import data as mvp_data
 from reporelay_mvp import recommend as recommend_fn
 from reporelay_mvp import recommend_random as explore_fn
+from reporelay_mvp.trending import USER_AGENT, scrape_trending
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -209,6 +212,99 @@ async def topics(
     finally:
         await session.close()
     return TopicsResponse(topics=result)
+
+
+# trending cache: (since_key) → (fetched_at, repos)
+_trending_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_TRENDING_CACHE_TTL = 7200  # 2 hours
+
+
+class TrendingRepoOut(BaseModel):
+    full_name: str
+    description: str | None = None
+    language: str | None = None
+    total_stars: int
+    stars_today: int = 0
+
+
+class TrendingResponse(BaseModel):
+    repos: list[TrendingRepoOut]
+
+
+@app.get("/trending", response_model=TrendingResponse)
+async def trending(
+    limit: int = Query(8, ge=1, le=25),
+    since: str = Query("daily", pattern="^(daily|weekly|monthly)$"),
+) -> TrendingResponse:
+    """
+    Live trending repos from github.com/trending (scraped, not API).
+    Cached for 2 hours. Falls back to DB trending_score if scrape fails.
+    """
+    now = _time_mod.monotonic()
+    cache_key = since
+
+    if cache_key in _trending_cache:
+        ts, repos = _trending_cache[cache_key]
+        if now - ts < _TRENDING_CACHE_TTL:
+            return TrendingResponse(repos=repos[:limit])
+
+    repos: list[dict[str, Any]] = []
+    scraped = False
+    try:
+        async with _httpx_mod.AsyncClient(
+            timeout=_httpx_mod.Timeout(12.0, connect=5.0)
+        ) as client:
+            raw = await scrape_trending(client, language="", since=since)
+            repos = [
+                {
+                    "full_name": r.full_name,
+                    "description": r.description,
+                    "language": r.language,
+                    "total_stars": r.total_stars,
+                    "stars_today": r.stars_today,
+                }
+                for r in raw
+            ]
+            scraped = True
+            _trending_cache[cache_key] = (now, repos[:])
+            logger.info("trending scrape: %d repos (since=%s)", len(repos), since)
+    except Exception as exc:
+        logger.warning("trending scrape failed — falling back to DB: %s", exc)
+
+    if not scraped:
+        session = await mvp_data.get_session()
+        try:
+            rows = await session.execute(
+                text(
+                    """
+                    SELECT full_name, description, language, stars,
+                           COALESCE(trending_score, 0) AS tscore
+                    FROM mvp_repos
+                    WHERE trending_score IS NOT NULL AND trending_score > 0
+                    ORDER BY trending_score DESC, stars DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": limit},
+            )
+            repos = [
+                {
+                    "full_name": r.full_name,
+                    "description": r.description,
+                    "language": r.language,
+                    "total_stars": r.stars,
+                    "stars_today": 0,
+                }
+                for r in rows
+            ]
+        finally:
+            await session.close()
+        if repos:
+            _trending_cache[cache_key] = (now, list(repos))
+
+    return TrendingResponse(
+        repos=[TrendingRepoOut(**r) for r in repos[:limit]]
+    )
 
 
 @app.get("/recommend", response_model=RecommendResponse)

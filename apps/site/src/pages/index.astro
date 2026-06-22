@@ -114,7 +114,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         var repos = data.repos || [];
         var html = "";
         for (var i = 0; i < repos.length; i++) {
-          html += '<a href="/repo/' + repos[i].full_name + '">' + repos[i].full_name + '</a>';
+          html += '<a href="/repo?repo=' + encodeURIComponent(repos[i].full_name) + '">' + repos[i].full_name + '</a>';
         }
         el.innerHTML = html;
       })
@@ -143,9 +143,9 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   function doSearch() {
     var repo = parseRepo(input.value);
     if (!repo) return;
-    var url = "/repo/" + repo;
+    var url = "/repo?repo=" + encodeURIComponent(repo);
     var rawTags = (tagsInput && tagsInput.value || "").trim();
-    if (rawTags) url += "?tags=" + encodeURIComponent(rawTags.split(/\s*,\s*/).join(","));
+    if (rawTags) url += "&tags=" + encodeURIComponent(rawTags.split(/\s*,\s*/).join(","));
     window.location.href = url;
   }
   if (btn && input) {

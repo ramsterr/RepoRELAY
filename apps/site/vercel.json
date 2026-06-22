@@ -1,7 +1,0 @@
-{
-  "cleanUrls": true,
-  "rewrites": [
-    { "source": "/repo/:owner/:name", "destination": "/repo" },
-    { "source": "/repo/:owner/:name/", "destination": "/repo" }
-  ]
-}

@@ -96,7 +96,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     for (var i = 0; i < repos.length; i++) {
       var r = repos[i];
       html +=
-        '<a class="repo-chip" href="/repo/' + r.full_name + '">' +
+        '<a class="repo-chip" href="/repo?repo=' + encodeURIComponent(r.full_name) + '">' +
         '<strong>' + r.full_name + '</strong>' +
         ' <span class="stars">' + fmt(r.stars) + ' ★</span>' +
         (r.language ? ' <span class="badge badge-lang">' + r.language + '</span>' : '') +
@@ -133,7 +133,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         var titleHtml =
           '<p class="section-label" style="margin-top: 1rem;">' +
           'showing ' + shown + ' of ' + total + ' <strong>' + topic + '</strong> repos &nbsp;' +
-          '<a href="/repo/' + (data.repos[0]?.full_name || '') + '" ' +
+          '<a href="/repo?repo=' + encodeURIComponent(data.repos[0]?.full_name || '') + '" ' +
           'class="btn btn-outline" style="display:inline-block;font-size:0.75rem;">' +
           'recommend from top</a>' +
           '</p>';
@@ -217,7 +217,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     var seed = Math.floor(Math.random() * 99999);
     cachedFetchWithRetry(API + "/explore?seed=" + seed + "&limit=1")
       .then(function (data) {
-        window.location.href = "/repo/" + data.source_repo;
+        window.location.href = "/repo?repo=" + encodeURIComponent(data.source_repo);
       })
       .catch(function () {});
   }

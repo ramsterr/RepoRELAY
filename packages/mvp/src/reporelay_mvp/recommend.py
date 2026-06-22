@@ -209,8 +209,20 @@ async def _expand_pool(
     over time. They're scored with cosine_sim = 0 (no embedding
     yet); the other four features (language, topics, deps,
     popularity) carry the score for these.
+
+    When the source has no embedding (cold repo from quick_save),
+    the vector pool is skipped and the SQL pool is doubled since
+    topic/language matching is the best signal available.
     """
-    db_candidates = await generate_candidates(session, source, seed=seed, tags=tags)
+    source_has_embedding = source.embedding is not None and any(v != 0.0 for v in source.embedding)
+
+    if source_has_embedding:
+        db_candidates = await generate_candidates(session, source, seed=seed, tags=tags, pool_size=250, vector_k=150)
+    else:
+        # Cold repo: skip vector pool (zero embedding is useless), double SQL pool
+        db_candidates = await generate_candidates(session, source, seed=seed, tags=tags, pool_size=400, vector_k=0)
+        logger.info("cold repo — doubled sql pool, skipped vector (no embedding yet)")
+
     logger.info("db pool: %d candidates", len(db_candidates))
 
     if len(db_candidates) >= _MIN_DB_POOL_FOR_SKIP:

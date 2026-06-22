@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from reporelay_mvp import data
-from reporelay_mvp.candidates import generate_candidates
+from reporelay_mvp.candidates import generate_candidates, NEUTRAL_SIM
 from reporelay_mvp.embedding import embed_text
 from reporelay_mvp.features import compute_features
 from reporelay_mvp.github import (
@@ -137,6 +137,58 @@ def _build_scored_repo(
     )
 
 
+_MIN_DB_POOL_FOR_SKIP = 200  # if DB pool is already this big, skip the GitHub search
+
+
+async def _find_proxy_embedding(session: Any, source: Repo) -> list[float] | None:
+    """
+    When a repo has no embedding, find the best-matched repo in the DB
+    by topic overlap and borrow its embedding for pgvector search.
+
+    Returns the proxy embedding or None if no good match exists.
+    """
+    if not source.topics:
+        return None
+
+    from sqlalchemy import text
+
+    rows = await session.execute(
+        text(
+            """
+            SELECT id, embedding, topics
+            FROM mvp_repos
+            WHERE embedding IS NOT NULL
+              AND topics && :topics
+            ORDER BY stars DESC
+            LIMIT 20
+            """
+        ),
+        {"topics": source.topics},
+    )
+    best_id = None
+    best_embedding = None
+    best_score = -1.0
+    source_set = set(source.topics)
+    for row in rows:
+        cand_topics = list(row.topics or [])
+        overlap = len(source_set & set(cand_topics))
+        if overlap > best_score:
+            best_score = overlap
+            best_id = row.id
+            emb_raw = row.embedding
+            if isinstance(emb_raw, list):
+                best_embedding = [float(x) for x in emb_raw]
+
+    if best_embedding:
+        logger.info(
+            "proxy embedding from repo %d (topic overlap=%d, topics=%s)",
+            best_id,
+            best_score,
+            source.topics,
+        )
+    return best_embedding
+
+
 async def recommend(
     full_name: str,
     *,
@@ -154,6 +206,7 @@ async def recommend(
     session = await data.get_session()
     try:
         source = await data.get_repo(session, full_name)
+        is_cold = False
         if source is None:
             logger.info("repo %s not in DB — quick-saving metadata + topics", full_name)
             await quick_save(owner, name)
@@ -162,9 +215,21 @@ async def recommend(
             source = await data.get_repo(session, full_name)
             if source is None:
                 raise LookupError(f"failed to fetch repo {full_name!r} from GitHub")
+            is_cold = True
             # Fire background task to fetch README + dependencies
-            # (slow API calls — available for next request)
             asyncio.create_task(enrich_repo(owner, name))
+
+        # If the source has no real embedding, borrow one from a
+        # topic-similar repo in the DB. This gives instant pgvector-
+        # quality results for ANY pasted URL.
+        source_has_embedding = source.embedding is not None and any(v != 0.0 for v in source.embedding)
+        if not source_has_embedding:
+            proxy_emb = await _find_proxy_embedding(session, source)
+            if proxy_emb:
+                source = source.model_copy(update={"embedding": proxy_emb})
+                logger.info("using proxy embedding for %s — full pgvector pipeline", full_name)
+            else:
+                logger.info("no proxy embedding found for %s — topic/language matching only", full_name)
 
         candidates = await _expand_pool(session, source, seed=seed, tags=tags)
 
@@ -209,20 +274,8 @@ async def _expand_pool(
     over time. They're scored with cosine_sim = 0 (no embedding
     yet); the other four features (language, topics, deps,
     popularity) carry the score for these.
-
-    When the source has no embedding (cold repo from quick_save),
-    the vector pool is skipped and the SQL pool is doubled since
-    topic/language matching is the best signal available.
     """
-    source_has_embedding = source.embedding is not None and any(v != 0.0 for v in source.embedding)
-
-    if source_has_embedding:
-        db_candidates = await generate_candidates(session, source, seed=seed, tags=tags, pool_size=250, vector_k=150)
-    else:
-        # Cold repo: skip vector pool (zero embedding is useless), double SQL pool
-        db_candidates = await generate_candidates(session, source, seed=seed, tags=tags, pool_size=400, vector_k=0)
-        logger.info("cold repo — doubled sql pool, skipped vector (no embedding yet)")
-
+    db_candidates = await generate_candidates(session, source, seed=seed, tags=tags)
     logger.info("db pool: %d candidates", len(db_candidates))
 
     if len(db_candidates) >= _MIN_DB_POOL_FOR_SKIP:

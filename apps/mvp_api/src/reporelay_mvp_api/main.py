@@ -307,6 +307,41 @@ async def trending(
     )
 
 
+@app.get("/random", response_model=PopularResponse)
+async def random_repos(
+    limit: int = Query(8, ge=1, le=30),
+) -> PopularResponse:
+    """Random repos from the DB — fresh picks every call."""
+    session = await mvp_data.get_session()
+    try:
+        rows = await session.execute(
+            text(
+                """
+                SELECT id, full_name, description, language, stars,
+                       COALESCE(trending_score, 0) AS trending_score
+                FROM mvp_repos
+                ORDER BY RANDOM()
+                LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        )
+        repos = [
+            PopularRepo(
+                id=r.id,
+                full_name=r.full_name,
+                description=r.description,
+                language=r.language,
+                stars=r.stars,
+                trending_score=float(r.trending_score or 0.0),
+            )
+            for r in rows
+        ]
+    finally:
+        await session.close()
+    return PopularResponse(repos=repos)
+
+
 @app.get("/recommend", response_model=RecommendResponse)
 async def recommend(
     repo: str = Query(..., description="Source repo as owner/name"),

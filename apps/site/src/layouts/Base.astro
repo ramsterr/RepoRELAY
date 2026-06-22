@@ -87,13 +87,15 @@ import "../styles/global.css";
           { name: "stars",     icon: "⋆" },
           { name: "peaks",     icon: "⩘" },
           { name: "gems",      icon: "◇" },
-          { name: "cracks",    icon: "⬡" },
+          { name: "heart",     icon: "♥" },
           { name: "ripples",   icon: "⊙" },
           { name: "forest",    icon: "⫾" },
           { name: "matrix",    icon: "⏐" },
           { name: "comb",      icon: "⬢" },
           { name: "bloom",     icon: "✿" },
-          { name: "contour",   icon: "〰" }
+          { name: "burst",     icon: "✹" },
+          { name: "waves",     icon: "〰" },
+          { name: "chess",     icon: "▣" }
         ];
 
         var patterns = [
@@ -162,18 +164,14 @@ import "../styles/global.css";
             }
           },
           function (c, r, cols, rows) {
-            var seeds = makeSeeds(r, cols, rows, Math.floor((cols * rows) / 30));
-            var maxD2 = 0;
+            var cx = cols / 2, cy = rows / 2 - rows * 0.06;
+            var s = Math.min(cols, rows) * 0.28;
+            var noise = makeNoise(r);
             for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-              var d2 = nearestDistSq(x, y, seeds);
-              if (d2 > maxD2) maxD2 = d2;
-            }
-            if (maxD2 === 0) maxD2 = 1;
-            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-              var d2 = nearestDistSq(x, y, seeds);
-              var nd = d2 / maxD2;
-              var v = 1 - nd * 1.3;
-              this.push(v < 0 ? 0 : v > 1 ? 1 : v);
+              var nx = (x - cx) / s, ny = -(y - cy) / s;
+              var inside = Math.pow(nx * nx + ny * ny - 1, 3) - nx * nx * ny * ny * ny <= 0.02;
+              var bg = noise(x * 0.08, y * 0.08) * 0.12;
+              this.push(clamp(inside ? 0.8 : bg, 0, 1));
             }
           },
           function (c, r, cols, rows) {
@@ -262,25 +260,34 @@ import "../styles/global.css";
             }
           },
           function (c, r, cols, rows) {
+            var cx = cols / 2, cy = rows / 2;
+            var rays = 14 + Math.floor(r() * 8);
             var minDim = Math.min(cols, rows);
-            var noise = makeNoise(r);
-            var cx = cols * (0.3 + r() * 0.4);
-            var cy = rows * (0.3 + r() * 0.4);
             for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-              var dx = (x - cx) / minDim, dy = (y - cy) / minDim;
-              var dist = Math.sqrt(dx * dx + dy * dy);
-              var n = noise(x * 0.1, y * 0.1) * 0.15;
-              var d = dist + n;
-              var contour = Math.abs(Math.sin(d * 12));
-              var v = contour < 0.18 ? 0.75 : 0;
-              v *= 0.8 + 0.2 * noise(x * 0.3, y * 0.3);
-              v *= 1 - Math.min(1, dist * 1.6);
+              var angle = Math.atan2(y - cy, x - cx);
+              var dist = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) / minDim;
+              var rayVal = Math.pow(Math.abs(Math.cos(angle * rays / 2)), 2.5);
+              var v = rayVal * clamp(1 - dist * 1.6, 0, 1);
               this.push(clamp(v, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var w1 = Math.sin(x * 0.08 + y * 0.04) * 0.5 + 0.5;
+              var w2 = Math.sin(x * 0.04 - y * 0.06 + 1.5) * 0.3;
+              var w3 = Math.sin(x * 0.13 + 2) * 0.15;
+              this.push(clamp(w1 + w2 + w3, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            var s = 4;
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              this.push(((Math.floor(x / s) + Math.floor(y / s)) % 2) ? 0.6 : 0.08);
             }
           }
         ];
 
-        var BASE_CELLS = [16, 12, 14, 14, 20, 10, 14, 12, 10, 18, 8, 12];
+        var BASE_CELLS = [16, 12, 14, 14, 20, 22, 14, 12, 10, 18, 8, 14, 12, 20];
         var WEIGHTS = [55, 18, 12, 9, 6];
 
         function pickClass(v) {
@@ -460,6 +467,7 @@ import "../styles/global.css";
         <div class="links">
           <a href="/" class:list={[Astro.url.pathname === "/" ? "active" : ""]}>home</a>
           <a href="/explore" class:list={[Astro.url.pathname === "/explore" ? "active" : ""]}>explore</a>
+          <a href="https://github.com/ramsterr/RepoRELAY" target="_blank" rel="noopener" class="github-link">github</a>
           <div class="art-picker">
             <button id="art-picker-btn" class="art-picker-btn" type="button" aria-label="Change art" title="Change art" aria-expanded="false">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">

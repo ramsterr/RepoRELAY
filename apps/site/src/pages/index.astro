@@ -37,7 +37,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 
   <p class="section-label">
     try something random
-    <button type="button" class="btn btn-outline" id="shuffle-btn" style="font-size:0.7rem;padding:0.25rem 0.6rem;margin-left:0.5rem;text-transform:lowercase;" aria-label="Shuffle repos">↻ shuffle</button>
+    <button type="button" class="btn btn-outline" id="shuffle-btn" onclick="return window.loadRandomRepos && window.loadRandomRepos()" style="font-size:0.7rem;padding:0.25rem 0.6rem;margin-left:0.5rem;text-transform:lowercase;" aria-label="Shuffle repos">↻ shuffle</button>
   </p>
   <div class="example-repos" id="popular-repos">
     <span style="opacity:0.4">loading…</span>
@@ -136,15 +136,12 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         var msg = (e && e.message) || "failed to load";
         el.innerHTML =
           '<span style="color: var(--red); font-size: 0.75rem;">' + msg + '</span>' +
-          ' <button type="button" class="btn btn-outline" style="font-size:0.7rem;padding:0.25rem 0.6rem;margin-left:0.5rem;" id="retry-random">retry</button>';
-        var rb = document.getElementById("retry-random");
-        if (rb) rb.addEventListener("click", function () { loadRandomRepos(); });
+          ' <button type="button" class="btn btn-outline" style="font-size:0.7rem;padding:0.25rem 0.6rem;margin-left:0.5rem;" onclick="return window.loadRandomRepos && window.loadRandomRepos()">retry</button>';
       });
   }
 
+  window.loadRandomRepos = loadRandomRepos;
   loadRandomRepos();
-  var shuffleBtn = document.getElementById("shuffle-btn");
-  if (shuffleBtn) shuffleBtn.addEventListener("click", loadRandomRepos);
 
   function fmtStars(n) {
     if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";

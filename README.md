@@ -1,5 +1,5 @@
-<img width="1518" height="404" alt="image" src="https://github.com/user-attachments/assets/ca415b7d-b563-4229-beb1-b7e8eb874600" />
 # RepoRelay
+<img width="1518" height="404" alt="image" src="https://github.com/user-attachments/assets/ca415b7d-b563-4229-beb1-b7e8eb874600" />
 
 
 
@@ -26,8 +26,6 @@ Live: **[reporelay-site.vercel.app](https://reporelay-site.vercel.app)** (fronte
 
 - **5-stage content-based recommender** — SQL filter + pgvector ANN → 6 hand-tuned features → weighted score → rerank for diversity
 - **Semantic tag filtering** — embed the user's tag text and match against README embeddings (no exact-tag match needed)
-  example
-  <img width="2056" height="1156" alt="image" src="https://github.com/user-attachments/assets/313ff110-8dce-4dd9-bdf9-67873525fc14" />
 
 
 - **Trending signal** — scrapes [github.com/trending](https://github.com/trending) daily to surface viral repos
@@ -209,7 +207,7 @@ GitHub API ──► Postgres + pgvector ──► Candidates ──► Features
 └── justfile                  # task runner
 ```
 
-
+# dark theme 
 <img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/d5113a97-159a-467f-8273-18dabbdab74b" />
 
 

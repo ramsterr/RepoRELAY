@@ -62,6 +62,8 @@ class Features:
     popularity_sim: float
     trending_boost: float = 0.0
     filter_cosine_sim: float = 0.0
+    quality_signal: float = 0.0
+    language_diversity: float = 0.0
 
     def as_dict(self) -> dict[str, float]:
         return {
@@ -72,4 +74,6 @@ class Features:
             "popularity_sim": self.popularity_sim,
             "trending_boost": self.trending_boost,
             "filter_cosine_sim": self.filter_cosine_sim,
+            "quality_signal": self.quality_signal,
+            "language_diversity": self.language_diversity,
         }

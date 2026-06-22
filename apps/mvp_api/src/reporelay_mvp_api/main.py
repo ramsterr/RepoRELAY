@@ -34,9 +34,33 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     from reporelay_mvp.embedding import preloadModel
+    from reporelay_mvp.features import load_topic_idf
 
     asyncio.create_task(preloadModel())
-    logger.info("model preloading in background — server ready")
+
+    # Load IDF weights from the topic distribution in the DB
+    # so rare topics count more than common ones in scoring.
+    try:
+        session = await mvp_data.get_session()
+        try:
+            rows = await session.execute(
+                text(
+                    """
+                    SELECT unnest(topics) AS topic, COUNT(*) AS cnt
+                    FROM mvp_repos
+                    GROUP BY topic
+                    """
+                )
+            )
+            topic_counts: dict[str, int] = {r.topic: r.cnt for r in rows if r.topic}
+            load_topic_idf(topic_counts)
+            logger.info("IDF weights loaded for %d topics", len(topic_counts))
+        finally:
+            await session.close()
+    except Exception as exc:
+        logger.warning("failed to load IDF weights (using unweighted fallback): %s", exc)
+
+    logger.info("server ready")
     yield
 
 

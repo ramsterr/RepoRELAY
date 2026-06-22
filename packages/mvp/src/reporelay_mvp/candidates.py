@@ -80,11 +80,10 @@ async def generate_candidates(
             logger.info("tag filter: %d candidates after filtering by %s", len(merged), tags)
         else:
             logger.warning(
-                "tag filter eliminated all %d candidates for tags=%s — returning empty pool",
+                "tag filter eliminated all %d candidates for tags=%s — returning unfiltered pool",
                 len(merged),
                 tags,
             )
-            return []
 
     if seed is not None:
         rng = random.Random(seed)

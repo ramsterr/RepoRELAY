@@ -40,10 +40,10 @@ import "../styles/global.css";
     </script>
     <script is:inline>
       (function () {
+        /* ── deterministic PRNG ── */
         function mulberry32(a) {
           return function () {
-            a |= 0;
-            a = (a + 0x6d2b79f5) | 0;
+            a |= 0; a = (a + 0x6d2b79f5) | 0;
             var t = a;
             t = Math.imul(t ^ (t >>> 15), t | 1);
             t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
@@ -51,59 +51,196 @@ import "../styles/global.css";
           };
         }
 
-        var WEIGHTS = [55, 18, 12, 9, 6];
-        var CELL = 20;
-        var resizeTimer = null;
+        /* ── helpers ── */
+        function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+        function lerp(a, b, t) { return a + (b - a) * t; }
 
-        function pickClass(rand) {
-          var r = rand() * 100;
+        /* ── smooth noise (bilinear interpolation of random grid) ── */
+        function makeNoise(rand) {
+          var grid = [];
+          for (var i = 0; i < 256; i++) {
+            grid[i] = [];
+            for (var j = 0; j < 256; j++) grid[i][j] = rand();
+          }
+          return function (x, y) {
+            var xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+            var xf = x - Math.floor(x),  yf = y - Math.floor(y);
+            var tl = grid[yi][xi], tr = grid[yi][(xi + 1) & 255];
+            var bl = grid[(yi + 1) & 255][xi], br = grid[(yi + 1) & 255][(xi + 1) & 255];
+            var sx = xf * xf * (3 - 2 * xf);
+            var sy = yf * yf * (3 - 2 * yf);
+            return lerp(lerp(tl, tr, sx), lerp(bl, br, sx), sy);
+          };
+        }
+
+        /* ── Voronoi seeds ── */
+        function makeSeeds(rand, cols, rows, count) {
+          var s = [];
+          for (var i = 0; i < count; i++) s.push({ x: rand() * cols, y: rand() * rows });
+          return s;
+        }
+        function nearestDistSq(x, y, seeds) {
+          var best = 1e9;
+          for (var i = 0; i < seeds.length; i++) {
+            var dx = x - seeds[i].x, dy = y - seeds[i].y;
+            var d2 = dx * dx + dy * dy;
+            if (d2 < best) best = d2;
+          }
+          return best;
+        }
+
+        /* ── quantify (0-1 → class 0-4) ── */
+        function q(v) { var c = Math.floor(clamp(v, 0, 0.999) * 5); return c > 4 ? 4 : c; }
+
+        /* ── pattern generators ── */
+        var patterns = [
+          /* 0  Aurora Borealis  — cell 16 */
+          function (c, r, cols, rows) {
+            var noise = makeNoise(r);
+            for (var y = 0; y < rows; y++) {
+              for (var x = 0; x < cols; x++) {
+                var ny = y / rows;
+                var wave = Math.sin(x * 0.025 + noise(x * 0.03, y * 0.06) * 5) * 0.5 + 0.5;
+                var fade = 1 - ny * 0.85;
+                var shimmer = 0.65 + 0.35 * noise(x * 0.08 + 50, y * 0.04 + 30);
+                this.push(wave * fade * shimmer);
+              }
+            }
+          },
+          /* 1  Ocean Depths  — cell 12 */
+          function (c, r, cols, rows) {
+            for (var y = 0; y < rows; y++) {
+              for (var x = 0; x < cols; x++) {
+                var nx = x / cols, ny = y / rows;
+                var s1 = Math.sin(nx * 12 + ny * 2) * 0.5 + 0.5;
+                var s2 = Math.sin(nx * 7 - ny * 4 + 2) * 0.5 + 0.5;
+                var s3 = Math.sin(nx * 18 + ny * 6 + 5) * 0.5 + 0.5;
+                var depth = (s1 * 0.45 + s2 * 0.3 + s3 * 0.25) * (1 - ny * 0.7);
+                var foam = (ny < 0.12) ? 0.15 * (1 - ny / 0.12) : 0;
+                this.push(clamp(depth + foam, 0, 1));
+              }
+            }
+          },
+          /* 2  Starfield  — cell 14 */
+          function (c, r, cols, rows) {
+            var cx = cols / 2, cy = rows / 2;
+            var noise = makeNoise(r);
+            for (var y = 0; y < rows; y++) {
+              for (var x = 0; x < cols; x++) {
+                var dx = x - cx, dy = y - cy;
+                var dist = Math.sqrt(dx * dx + dy * dy);
+                var angle = Math.atan2(dy, dx);
+                var logR = Math.log(1 + dist * 0.15);
+                var spiral = (Math.sin(angle * 2.5 + logR * 6) * 0.5 + 0.5);
+                var armFade = clamp(1 - dist / (Math.max(cols, rows) * 0.45), 0, 1);
+                var arm = spiral * armFade * 0.55;
+                var n = noise(x * 0.12, y * 0.12);
+                var star = (n > 0.87) ? 0.7 + (n - 0.87) * 5 : 0;
+                this.push(clamp(arm + star * 0.6, 0, 1));
+              }
+            }
+          },
+          /* 3  Mountain Ridges  — cell 14 */
+          function (c, r, cols, rows) {
+            var ridges = [];
+            for (var i = 0; i < 5; i++) ridges.push({ x: r() * cols, h: 0.3 + r() * 0.6, w: 0.15 + r() * 0.25 });
+            for (var y = 0; y < rows; y++) {
+              for (var x = 0; x < cols; x++) {
+                var nx = x / cols, ny = y / rows;
+                var peak = 0;
+                for (var i = 0; i < ridges.length; i++) {
+                  var r2 = ridges[i];
+                  var nx2 = r2.x / cols;
+                  var d = Math.abs(nx - nx2) / r2.w;
+                  if (d < 1) {
+                    var h = r2.h * (1 - d * d);
+                    if (h > peak) peak = h;
+                  }
+                }
+                var base = (1 - ny) * 0.25;
+                var value = clamp(peak * 0.8 + base * 0.3, 0, 1);
+                var jitter = (r() - 0.5) * 0.08;
+                this.push(clamp(value + jitter, 0, 1));
+              }
+            }
+          },
+          /* 4  Diamond Lattice  — cell 20 */
+          function (c, r, cols, rows) {
+            for (var y = 0; y < rows; y++) {
+              for (var x = 0; x < cols; x++) {
+                var dx = Math.abs((x % 10) - 5);
+                var dy = Math.abs((y % 10) - 5);
+                var dist = dx + dy;
+                var value = clamp(1 - dist / 8, 0, 1);
+                var shimmer = 0.8 + 0.2 * (r() - 0.5);
+                this.push(clamp(value * shimmer, 0, 1));
+              }
+            }
+          },
+          /* 5  Cracked Earth / Voronoi  — cell 10 */
+          function (c, r, cols, rows) {
+            var seeds = makeSeeds(r, cols, rows, Math.floor((cols * rows) / 30));
+            var maxD2 = 0;
+            for (var y = 0; y < rows; y++) {
+              for (var x = 0; x < cols; x++) {
+                var d2 = nearestDistSq(x, y, seeds);
+                if (d2 > maxD2) maxD2 = d2;
+              }
+            }
+            if (maxD2 === 0) maxD2 = 1;
+            for (var y = 0; y < rows; y++) {
+              for (var x = 0; x < cols; x++) {
+                var d2 = nearestDistSq(x, y, seeds);
+                var nd = d2 / maxD2;
+                var v = 1 - nd * 1.3;
+                this.push(v < 0 ? 0 : v > 1 ? 1 : v);
+              }
+            }
+          },
+        ];
+
+        var CELLS = [16, 12, 14, 14, 20, 10];
+        var WEIGHTS = [55, 18, 12, 9, 6];
+
+        function pickClass(v) {
+          var r2 = v * 100;
           var acc = 0;
           for (var i = 0; i < WEIGHTS.length; i++) {
             acc += WEIGHTS[i];
-            if (r < acc) return i;
+            if (r2 < acc) return i;
           }
           return 0;
         }
 
+        /* ── main generator ── */
         function generate() {
           var old = document.getElementById("commit-grid");
           if (old) old.remove();
-          var w = window.innerWidth;
-          var h = window.innerHeight;
-          var cols = Math.ceil(w / CELL) + 1;
-          var rows = Math.ceil(h / CELL) + 1;
+
           var seed = Math.floor(Math.random() * 2147483647);
           var rand = mulberry32(seed);
+          var pi = Math.floor(rand() * patterns.length);
+          var cell = CELLS[pi];
+
+          var w = window.innerWidth, h = window.innerHeight;
+          var cols = Math.ceil(w / cell) + 1;
+          var rows = Math.ceil(h / cell) + 1;
+          var values = [];
+          patterns[pi].call(values, null, rand, cols, rows);
+
           var parts = [];
-          parts.push(
-            '<svg xmlns="http://www.w3.org/2000/svg" width="',
-            w,
-            '" height="',
-            h,
-            '" viewBox="0 0 ',
-            w,
-            " ",
-            h,
-            '" shape-rendering="crispEdges" preserveAspectRatio="xMidYMid slice">'
-          );
+          parts.push('<svg xmlns="http://www.w3.org/2000/svg" width="', w, '" height="', h,
+            '" viewBox="0 0 ', w, ' ', h,
+            '" shape-rendering="crispEdges" preserveAspectRatio="xMidYMid slice">');
+
           for (var y = 0; y < rows; y++) {
             for (var x = 0; x < cols; x++) {
-              var cls = pickClass(rand);
-              parts.push(
-                '<rect class="c',
-                cls,
-                '" x="',
-                x * CELL,
-                '" y="',
-                y * CELL,
-                '" width="',
-                CELL,
-                '" height="',
-                CELL,
-                '"/>'
-              );
+              var cls = pickClass(values[y * cols + x]);
+              parts.push('<rect class="c', cls, '" x="', x * cell, '" y="', y * cell,
+                '" width="', cell, '" height="', cell, '"/>');
             }
           }
+
           parts.push("</svg>");
           var wrap = document.createElement("div");
           wrap.innerHTML = parts.join("");
@@ -112,6 +249,7 @@ import "../styles/global.css";
           document.body.appendChild(svg);
         }
 
+        var resizeTimer = null;
         function schedule() {
           if (resizeTimer) clearTimeout(resizeTimer);
           resizeTimer = setTimeout(generate, 200);
@@ -155,9 +293,7 @@ import "../styles/global.css";
           var current = document.documentElement.getAttribute("data-theme") || "dark";
           var next = current === "dark" ? "light" : "dark";
           document.documentElement.setAttribute("data-theme", next);
-          try {
-            localStorage.setItem("rr-theme", next);
-          } catch (e) {}
+          try { localStorage.setItem("rr-theme", next); } catch (e) {}
           refresh();
         });
       })();

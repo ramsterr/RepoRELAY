@@ -1,4 +1,5 @@
-# RepoRelay
+<img width="1518" height="404" alt="image" src="https://github.com/user-attachments/assets/ca415b7d-b563-4229-beb1-b7e8eb874600" />
+#RepoRelay
 
 A GitHub repo recommender. Give it a repo, get back similar repos.
 
@@ -20,9 +21,22 @@ Live: **[reporelay-site.vercel.app](https://reporelay-site.vercel.app)** (fronte
 
 - **5-stage content-based recommender** — SQL filter + pgvector ANN → 6 hand-tuned features → weighted score → rerank for diversity
 - **Semantic tag filtering** — embed the user's tag text and match against README embeddings (no exact-tag match needed)
+  example
+  <img width="2056" height="1156" alt="image" src="https://github.com/user-attachments/assets/313ff110-8dce-4dd9-bdf9-67873525fc14" />
+
+
 - **Trending signal** — scrapes [github.com/trending](https://github.com/trending) daily to surface viral repos
+  <img width="2130" height="784" alt="image" src="https://github.com/user-attachments/assets/b504f577-5cda-4ee4-aa6f-df382efb7110" />
+
+
 - **Web UI** — Astro 5 + vanilla JS, dark/light theme, glass cards over a generative commit-graph art backdrop
 - **12 grid-art patterns** — aurora, ocean, stars, peaks, gems, cracks, ripples, forest, matrix, comb, bloom, contour — pickable from the nav, persists per user
+
+
+  
+- **explore topics**
+  <img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/a3f96b5e-ecd5-430c-9f5a-bac87ae6f995" />
+
 
 **[→ Architecture & data flow](ARCHITECTURE.md)** · **[→ Deploy notes](DEPLOY.md)**
 

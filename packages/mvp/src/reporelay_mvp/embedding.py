@@ -5,12 +5,18 @@ technical vocabulary for README-vs-README similarity).
 
 Vectors are L2-normalized (required by BGE's contrastive loss and
 recommended for all cosine-similarity use cases).
+
+Set REPORE_LAY_LIGHTWEIGHT=1 to skip loading the model (~200-300MB
+RAM savings). In lightweight mode embed_text() returns zeros and
+tag filtering falls back to exact topic matching. Useful for
+deployments on constrained hardware (e.g. Render free tier 512MB).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from typing import Any
@@ -24,6 +30,7 @@ _model_lock = threading.Lock()
 DIMENSION = 384
 
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
+_LIGHTWEIGHT = os.environ.get("REPORE_LAY_LIGHTWEIGHT", "").lower() in ("1", "true", "yes")
 
 
 def _load_model() -> Any:
@@ -45,13 +52,16 @@ def _load_model() -> Any:
 
 
 async def preloadModel() -> None:
+    if _LIGHTWEIGHT:
+        logger.info("lightweight mode — skipping model load (saves ~200-300MB)")
+        return
     await asyncio.to_thread(_load_model)
     logger.info("embedding model preloaded and ready")
 
 
 async def embed_text(text_value: str) -> list[float]:
-    """Compute a 384-dim embedding for a piece of text. Returns zeros for empty input."""
-    if not text_value or not text_value.strip():
+    """Compute a 384-dim embedding for a piece of text. Returns zeros for empty input or lightweight mode."""
+    if _LIGHTWEIGHT or not text_value or not text_value.strip():
         return [0.0] * DIMENSION
     model = _load_model()
     vector = await asyncio.to_thread(

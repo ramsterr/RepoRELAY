@@ -253,11 +253,99 @@ async def search_repositories(
     )
 
 
+async def quick_save(owner: str, name: str) -> int:
+    """
+    Lightweight fetch: metadata + topics only. Returns in ~2s — enough for
+    topic/language-based recommendations while README + deps are fetched
+    in the background. Returns the repo id.
+    """
+    settings = get_mvp_settings()
+    headers = _auth_headers(settings.github_token)
+    timeout = httpx.Timeout(10.0, connect=5.0)
+
+    async with httpx.AsyncClient(base_url=GITHUB_API, headers=headers, timeout=timeout) as client:
+        metadata, topics = await asyncio.gather(
+            fetch_repo_metadata(client, owner, name),
+            fetch_topics(client, owner, name),
+        )
+        repo_id = int(metadata["id"])
+
+        language = metadata.get("language")
+        stars = int(metadata.get("stargazers_count") or 0)
+        full_name = f"{owner}/{name}"
+
+        session = await data.get_session()
+        try:
+            await data.upsert_repo(
+                session,
+                repo_id=repo_id,
+                owner=owner,
+                name=name,
+                full_name=full_name,
+                description=metadata.get("description"),
+                language=language,
+                topics=topics,
+                stars=stars,
+                dependencies=[],
+            )
+            await data.set_embedding(session, repo_id=repo_id, embedding=[0.0] * 384)
+            await session.commit()
+        finally:
+            await session.close()
+
+    logger.info("quick-saved %s/%s (id=%d)", owner, name, repo_id)
+    return repo_id
+
+
+async def enrich_repo(owner: str, name: str) -> None:
+    """
+    Background task: fetch README + dependencies + embed. Called after
+    quick_save to backfill the full data for future requests.
+    """
+    settings = get_mvp_settings()
+    headers = _auth_headers(settings.github_token)
+    timeout = httpx.Timeout(30.0, connect=10.0)
+
+    try:
+        async with httpx.AsyncClient(base_url=GITHUB_API, headers=headers, timeout=timeout) as client:
+            readme, deps = await asyncio.gather(
+                fetch_readme(client, owner, name),
+                fetch_dependencies(client, owner, name),
+            )
+
+        session = await data.get_session()
+        try:
+            full_name = f"{owner}/{name}"
+            existing = await data.get_repo(session, full_name)
+            if existing is None:
+                return
+            if readme.strip():
+                embedding = await embed_text(readme[:8000])
+                await data.set_embedding(session, repo_id=existing.id, embedding=embedding)
+            if deps:
+                await data.upsert_repo(
+                    session,
+                    repo_id=existing.id,
+                    owner=owner,
+                    name=name,
+                    full_name=full_name,
+                    description=existing.description,
+                    language=existing.language,
+                    topics=existing.topics,
+                    stars=existing.stars,
+                    dependencies=deps,
+                )
+            await session.commit()
+        finally:
+            await session.close()
+
+        logger.info("enriched %s/%s (deps=%d, embedded=%s)", owner, name, len(deps), bool(readme.strip()))
+    except Exception as exc:
+        logger.warning("background enrich failed for %s/%s: %s", owner, name, exc)
+
+
 async def save_repo(owner: str, name: str) -> int:
-    """
-    Fetch a single repo from GitHub, persist its row, and embed its
-    README. Returns the repo id.
-    """
+    """Full fetch: metadata + README + topics + deps + embed. Used by CLI."""
     settings = get_mvp_settings()
     headers = _auth_headers(settings.github_token)
     timeout = httpx.Timeout(30.0, connect=10.0)

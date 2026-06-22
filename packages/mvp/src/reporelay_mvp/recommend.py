@@ -20,6 +20,7 @@ pipeline against it — the "surprise me / explore" feature.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -35,6 +36,8 @@ from reporelay_mvp.features import compute_features
 from reporelay_mvp.github import (
     _auth_client,
     _search_item_to_repo,
+    enrich_repo,
+    quick_save,
     save_repo,
     search_repositories,
 )
@@ -152,14 +155,16 @@ async def recommend(
     try:
         source = await data.get_repo(session, full_name)
         if source is None:
-            logger.info("repo %s not in DB — fetching from GitHub", full_name)
-            await save_repo(owner, name)
-            # Re-fetch after save (with fresh session to see new rows)
+            logger.info("repo %s not in DB — quick-saving metadata + topics", full_name)
+            await quick_save(owner, name)
             await session.close()
             session = await data.get_session()
             source = await data.get_repo(session, full_name)
             if source is None:
                 raise LookupError(f"failed to fetch repo {full_name!r} from GitHub")
+            # Fire background task to fetch README + dependencies
+            # (slow API calls — available for next request)
+            asyncio.create_task(enrich_repo(owner, name))
 
         candidates = await _expand_pool(session, source, seed=seed, tags=tags)
 

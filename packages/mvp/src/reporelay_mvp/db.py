@@ -30,6 +30,9 @@ def _get_sessionmaker() -> async_sessionmaker[AsyncSession]:
             settings.database_url,
             echo=False,
             pool_pre_ping=True,
+            pool_size=2,
+            max_overflow=2,
+            pool_recycle=3600,
         )
         _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
     return _sessionmaker

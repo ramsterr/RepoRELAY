@@ -4,6 +4,9 @@ A GitHub repo recommender. Give it a repo, get back similar repos.
 
 No ML training. No user data. Postgres + pgvector + a pre-trained sentence-transformer.
 
+<img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/c397f2b9-9c4f-4bf2-a14f-47091c0bd70f" />
+
+
 ```
 fastapi/fastapi  →  pallets/flask, django/django, psf/requests, encode/starlette ...
 ```
@@ -11,6 +14,7 @@ fastapi/fastapi  →  pallets/flask, django/django, psf/requests, encode/starlet
 Live: **[reporelay-site.vercel.app](https://reporelay-site.vercel.app)** (frontend on Vercel, API on Render).
 
 ---
+
 
 ## What's here
 
@@ -186,7 +190,13 @@ GitHub API ──► Postgres + pgvector ──► Candidates ──► Features
 └── justfile                  # task runner
 ```
 
+
+<img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/9c1a6172-3296-4c80-be95-26cc115b5485" />
+
+
 ---
+
+
 
 ## License
 

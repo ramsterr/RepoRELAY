@@ -26,6 +26,15 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     <button type="button" id="search-btn">search</button>
   </div>
 
+  <p class="section-label">
+    <span class="trending-icon" aria-hidden="true">▲</span>
+    trending on github
+    <span class="section-sub">updated daily from github.com/trending</span>
+  </p>
+  <div class="trending-grid" id="trending-grid">
+    <div class="loading" style="grid-column: 1 / -1;">loading trending…</div>
+  </div>
+
   <p class="section-label">try one of these</p>
   <div class="example-repos" id="popular-repos">
     <span style="opacity:0.4">loading…</span>
@@ -124,6 +133,64 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
           '<span style="color: var(--red); font-size: 0.75rem;">' + msg + '</span>' +
           ' <button type="button" class="btn btn-outline" style="font-size:0.7rem;padding:0.25rem 0.6rem;margin-left:0.5rem;" id="retry-popular">retry</button>';
         var rb = document.getElementById("retry-popular");
+        if (rb) rb.addEventListener("click", function () { window.location.reload(); });
+      });
+  }
+
+  function fmtStars(n) {
+    if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return String(n);
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  var trendingEl = document.getElementById("trending-grid");
+  if (trendingEl) {
+    cachedFetchWithRetry(API + "/popular?limit=24", {
+      onSlow: function () {
+        trendingEl.innerHTML = '<div class="loading" style="grid-column: 1 / -1;">still loading…</div>';
+      },
+    })
+      .then(function (data) {
+        var repos = (data.repos || []).slice();
+        repos.sort(function (a, b) { return (b.trending_score || 0) - (a.trending_score || 0); });
+        repos = repos.filter(function (r) { return (r.trending_score || 0) > 0; });
+        repos = repos.slice(0, 8);
+        if (repos.length === 0) {
+          trendingEl.innerHTML = '<div class="loading" style="grid-column: 1 / -1;">no trending repos yet</div>';
+          return;
+        }
+        var html = "";
+        for (var i = 0; i < repos.length; i++) {
+          var r = repos[i];
+          var desc = r.description ? escapeHtml(r.description) : "(no description)";
+          html += '<a class="trending-card" href="/repo?repo=' + encodeURIComponent(r.full_name) + '">';
+          html += '<div class="trending-card-top">';
+          html += '<span class="trending-card-name">' + escapeHtml(r.full_name) + '</span>';
+          html += '<span class="trending-card-stars">' + fmtStars(r.stars) + ' ★</span>';
+          html += '</div>';
+          html += '<div class="trending-card-desc">' + desc + '</div>';
+          html += '<div class="trending-card-meta">';
+          if (r.language) html += '<span class="badge badge-lang">' + escapeHtml(r.language) + '</span>';
+          html += '</div>';
+          html += '</a>';
+        }
+        trendingEl.innerHTML = html;
+      })
+      .catch(function (e) {
+        var msg = (e && e.message) || "failed to load";
+        trendingEl.innerHTML =
+          '<div class="error" style="grid-column: 1 / -1;">' + msg +
+          '<br><button type="button" class="btn btn-outline" style="margin-top:0.5rem;font-size:0.75rem;padding:0.3rem 0.7rem;" id="retry-trending">retry</button>' +
+          '</div>';
+        var rb = document.getElementById("retry-trending");
         if (rb) rb.addEventListener("click", function () { window.location.reload(); });
       });
   }

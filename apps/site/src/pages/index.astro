@@ -1,33 +1,233 @@
 ---
-import { getRecommendations } from "~/lib/api";
+import Base from "../layouts/Base.astro";
 
-const query = Astro.url.searchParams.get("repo") ?? "vercel/next.js";
-const data = await getRecommendations(query, 5);
+const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RepoRelay - {query}</title>
-  </head>
-  <body>
-    <main>
-      <h1>RepoRelay</h1>
-      <p>Recommendations for <code>{query}</code></p>
-      {data.slots.length === 0 ? (
-        <p><em>No recommendations yet (stub).</em></p>
-      ) : (
-        <ul>
-          {data.slots.map((slot) => (
-            <li>
-              <h2>{slot.name}</h2>
-              {slot.repos.length === 0 ? <p><em>empty</em></p> : null}
-            </li>
-          ))}
-        </ul>
-      )}
-    </main>
-  </body>
-</html>
+<Base>
+  <h1>find repos worth your time</h1>
+  <p class="subtitle">
+    built with a 5-stage recommender — pure Postgres + pgvector, no ML training
+  </p>
+
+  <div class="search-bar">
+    <input
+      type="text"
+      id="repo-input"
+      placeholder="owner/name or paste a GitHub URL"
+      autofocus
+    />
+    <input
+      type="text"
+      id="tags-input"
+      placeholder="tags (optional) — e.g. react, typescript"
+      style="max-width:280px;"
+    />
+    <button type="button" id="search-btn">search</button>
+  </div>
+
+  <p class="section-label">
+    <span class="trending-icon" aria-hidden="true">▲</span>
+    trending on github
+    <span class="section-sub">updated daily from github.com/trending</span>
+  </p>
+  <div class="trending-grid" id="trending-grid">
+    <div class="loading" style="grid-column: 1 / -1;">loading trending…</div>
+  </div>
+
+  <p class="section-label">
+    try something random
+    <button type="button" class="btn btn-outline" id="shuffle-btn" onclick="return window.loadRandomRepos && window.loadRandomRepos()" style="font-size:0.7rem;padding:0.25rem 0.6rem;margin-left:0.5rem;text-transform:lowercase;" aria-label="Shuffle repos">↻ shuffle</button>
+  </p>
+  <div class="example-repos" id="popular-repos">
+    <span style="opacity:0.4">loading…</span>
+  </div>
+
+  <div class="actions" style="margin-top: 2rem;">
+    <a href="/explore" class="btn btn-outline" style="display:inline-block;">
+      surprise me
+    </a>
+  </div>
+</Base>
+
+<script define:vars={{ API }}>
+
+  var _fc = {};
+  function cachedFetch(url, opts) {
+    opts = opts || {};
+    var timeoutMs = opts.timeout || 15000;
+    var onSlow = opts.onSlow;
+    var now = Date.now();
+    if (_fc[url] && now - _fc[url].ts < 300000) {
+      return Promise.resolve(_fc[url].data);
+    }
+    try {
+      var sc = sessionStorage.getItem("rr:" + url);
+      if (sc) {
+        var parsed = JSON.parse(sc);
+        if (now - parsed.ts < 300000) {
+          _fc[url] = parsed;
+          return Promise.resolve(parsed.data);
+        }
+      }
+    } catch (e) {}
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timeoutId = setTimeout(function () { if (controller) controller.abort(); }, timeoutMs);
+    var slowId = onSlow ? setTimeout(onSlow, 3000) : null;
+    var fetchOpts = controller ? { signal: controller.signal } : {};
+    return fetch(url, fetchOpts).then(function (res) {
+      clearTimeout(timeoutId);
+      if (slowId) clearTimeout(slowId);
+      if (!res.ok) throw new Error("API " + res.status + " " + (res.statusText || ""));
+      return res.text().then(function (text) {
+        var data;
+        try { data = JSON.parse(text); }
+        catch (e) { throw new Error("API returned non-JSON response"); }
+        var entry = { data: data, ts: now };
+        _fc[url] = entry;
+        try { sessionStorage.setItem("rr:" + url, JSON.stringify(entry)); } catch (e) {}
+        return data;
+      });
+    }).catch(function (err) {
+      clearTimeout(timeoutId);
+      if (slowId) clearTimeout(slowId);
+      if (controller && err && err.name === "AbortError") {
+        throw new Error("request timed out after " + (timeoutMs / 1000) + "s");
+      }
+      if (err && err.message && /Failed to fetch|NetworkError|Load failed/i.test(err.message)) {
+        throw new Error("API is unreachable — is the backend running on " + API + "?");
+      }
+      throw err;
+    });
+  }
+
+  function cachedFetchWithRetry(url, opts, retries) {
+    retries = retries || 1;
+    return cachedFetch(url, opts).catch(function (err) {
+      if (retries > 0) {
+        return new Promise(function (resolve) {
+          setTimeout(function () {
+            resolve(cachedFetchWithRetry(url, opts, retries - 1));
+          }, 2000);
+        });
+      }
+      throw err;
+    });
+  }
+
+  function loadRandomRepos() {
+    var el = document.getElementById("popular-repos");
+    if (!el) return;
+    el.innerHTML = '<span style="opacity:0.4">loading…</span>';
+    cachedFetchWithRetry(API + "/random?limit=8", {
+      onSlow: function () {
+        el.innerHTML = '<span style="opacity:0.4">still loading…</span>';
+      },
+    })
+      .then(function (data) {
+        var repos = data.repos || [];
+        var html = "";
+        for (var i = 0; i < repos.length; i++) {
+          html += '<a href="/repo?repo=' + encodeURIComponent(repos[i].full_name) + '">' + repos[i].full_name + '</a>';
+        }
+        el.innerHTML = html;
+      })
+      .catch(function (e) {
+        var msg = (e && e.message) || "failed to load";
+        el.innerHTML =
+          '<span style="color: var(--red); font-size: 0.75rem;">' + msg + '</span>' +
+          ' <button type="button" class="btn btn-outline" style="font-size:0.7rem;padding:0.25rem 0.6rem;margin-left:0.5rem;" onclick="return window.loadRandomRepos && window.loadRandomRepos()">retry</button>';
+      });
+  }
+
+  window.loadRandomRepos = loadRandomRepos;
+  loadRandomRepos();
+
+  function fmtStars(n) {
+    if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return String(n);
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  var trendingEl = document.getElementById("trending-grid");
+  if (trendingEl) {
+    cachedFetchWithRetry(API + "/trending?limit=8", {
+      onSlow: function () {
+        trendingEl.innerHTML = '<div class="loading" style="grid-column: 1 / -1;">still loading…</div>';
+      },
+    })
+      .then(function (data) {
+        var repos = data.repos || [];
+        if (repos.length === 0) {
+          trendingEl.innerHTML = '<div class="loading" style="grid-column: 1 / -1;">no trending repos right now</div>';
+          return;
+        }
+        var html = "";
+        for (var i = 0; i < repos.length; i++) {
+          var r = repos[i];
+          var desc = r.description ? escapeHtml(r.description) : "(no description)";
+          html += '<a class="trending-card" href="/repo?repo=' + encodeURIComponent(r.full_name) + '">';
+          html += '<div class="trending-card-top">';
+          html += '<span class="trending-card-name">' + escapeHtml(r.full_name) + '</span>';
+          html += '<span class="trending-card-stars">' + fmtStars(r.total_stars) + ' ★</span>';
+          html += '</div>';
+          html += '<div class="trending-card-desc">' + desc + '</div>';
+          html += '<div class="trending-card-meta">';
+          if (r.language) html += '<span class="badge badge-lang">' + escapeHtml(r.language) + '</span>';
+          if (r.stars_today > 0) html += '<span class="badge badge-trending">&nearr; ' + fmtStars(r.stars_today) + ' / ' + (r.stars_today >= 150 ? 'wk' : 'day') + '</span>';
+          html += '</div>';
+          html += '</a>';
+        }
+        trendingEl.innerHTML = html;
+      })
+      .catch(function (e) {
+        var msg = (e && e.message) || "failed to load";
+        trendingEl.innerHTML =
+          '<div class="error" style="grid-column: 1 / -1;">' + msg +
+          '<br><button type="button" class="btn btn-outline" style="margin-top:0.5rem;font-size:0.75rem;padding:0.3rem 0.7rem;" id="retry-trending">retry</button>' +
+          '</div>';
+        var rb = document.getElementById("retry-trending");
+        if (rb) rb.addEventListener("click", function () { window.location.reload(); });
+      });
+  }
+
+  function parseRepo(val) {
+    val = val.trim();
+    var m = val.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+\/[^\/\s?#]+)/i);
+    if (m) return m[1];
+    if (val.startsWith("/")) val = val.slice(1);
+    if (val.includes("/") && !val.includes(" ")) return val;
+    return null;
+  }
+
+  var btn = document.getElementById("search-btn");
+  var input = document.getElementById("repo-input");
+  var tagsInput = document.getElementById("tags-input");
+  function doSearch() {
+    var repo = parseRepo(input.value);
+    if (!repo) return;
+    var url = "/repo?repo=" + encodeURIComponent(repo);
+    var rawTags = (tagsInput && tagsInput.value || "").trim();
+    if (rawTags) url += "&tags=" + encodeURIComponent(rawTags.split(/\s*,\s*/).join(","));
+    window.location.href = url;
+  }
+  if (btn && input) {
+    btn.addEventListener("click", doSearch);
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); doSearch(); }
+    });
+    if (tagsInput) {
+      tagsInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); doSearch(); }
+      });
+    }
+  }
+</script>

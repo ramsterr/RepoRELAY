@@ -1,0 +1,533 @@
+---
+import Base from "../layouts/Base.astro";
+
+const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
+---
+
+<Base>
+  <h1>explore repos</h1>
+  <p class="subtitle">
+    random discoveries &amp; browse by topic
+  </p>
+
+  <p class="section-label">
+    <span class="trending-icon" aria-hidden="true">▲</span>
+    random picks
+    <button type="button" id="reroll-picks" class="btn btn-outline" style="font-size:0.7rem;padding:0.25rem 0.6rem;margin-left:0.5rem;text-transform:lowercase;">↻ reroll</button>
+  </p>
+  <div class="random-picks-grid" id="random-picks">
+    <div class="loading" style="grid-column: 1 / -1;">loading random repos…</div>
+  </div>
+
+  <div class="actions" style="margin-bottom: 2.5rem;">
+    <button class="btn btn-outline" id="roll-btn">random repo → recs</button>
+    <a href="/" class="btn btn-outline" style="display:inline-block;">back to search</a>
+  </div>
+
+  <p class="section-label">
+    browse by topic
+    <input type="text" id="topic-filter" class="topic-filter-input" placeholder="filter topics…" />
+  </p>
+  <div id="explore-container">
+    <div class="loading">loading topics…</div>
+  </div>
+</Base>
+
+<script is:inline define:vars={{ API }}>
+
+  var _fc = {};
+  function cachedFetch(url, opts) {
+    opts = opts || {};
+    var timeoutMs = opts.timeout || 15000;
+    var onSlow = opts.onSlow;
+    var now = Date.now();
+    if (_fc[url] && now - _fc[url].ts < 300000) {
+      return Promise.resolve(_fc[url].data);
+    }
+    try {
+      var sc = sessionStorage.getItem("rr:" + url);
+      if (sc) {
+        var parsed = JSON.parse(sc);
+        if (now - parsed.ts < 300000) {
+          _fc[url] = parsed;
+          return Promise.resolve(parsed.data);
+        }
+      }
+    } catch (e) {}
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timeoutId = setTimeout(function () { if (controller) controller.abort(); }, timeoutMs);
+    var slowId = onSlow ? setTimeout(onSlow, 3000) : null;
+    var fetchOpts = controller ? { signal: controller.signal } : {};
+    return fetch(url, fetchOpts).then(function (res) {
+      clearTimeout(timeoutId);
+      if (slowId) clearTimeout(slowId);
+      if (!res.ok) throw new Error("API " + res.status + " " + (res.statusText || ""));
+      return res.text().then(function (text) {
+        var data;
+        try { data = JSON.parse(text); }
+        catch (e) { throw new Error("API returned non-JSON response"); }
+        var entry = { data: data, ts: now };
+        _fc[url] = entry;
+        try { sessionStorage.setItem("rr:" + url, JSON.stringify(entry)); } catch (e) {}
+        return data;
+      });
+    }).catch(function (err) {
+      clearTimeout(timeoutId);
+      if (slowId) clearTimeout(slowId);
+      if (controller && err && err.name === "AbortError") {
+        throw new Error("request timed out after " + (timeoutMs / 1000) + "s");
+      }
+      if (err && err.message && /Failed to fetch|NetworkError|Load failed/i.test(err.message)) {
+        throw new Error("API is unreachable — is the backend running on " + API + "?");
+      }
+      throw err;
+    });
+  }
+
+  function cachedFetchWithRetry(url, opts, retries) {
+    retries = retries || 1;
+    return cachedFetch(url, opts).catch(function (err) {
+      if (retries > 0) {
+        return new Promise(function (resolve) {
+          setTimeout(function () {
+            resolve(cachedFetchWithRetry(url, opts, retries - 1));
+          }, 2000);
+        });
+      }
+      throw err;
+    });
+  }
+
+  function fmt(n) {
+    if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return String(n);
+  }
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function renderRepos(repos) {
+    if (!repos || repos.length === 0) return '<div class="loading">no repos found</div>';
+    var html = '<div class="topic-repos">';
+    for (var i = 0; i < repos.length; i++) {
+      var r = repos[i];
+      html +=
+        '<a class="repo-chip" href="/repo?repo=' + encodeURIComponent(r.full_name) + '">' +
+        '<strong>' + esc(r.full_name) + '</strong>' +
+        ' <span class="stars">' + fmt(r.stars) + ' ★</span>' +
+        (r.language ? ' <span class="badge badge-lang">' + esc(r.language) + '</span>' : '') +
+        '</a>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  var totalCountByTopic = {};
+
+  function loadTopicDetail(topic) {
+    var detail = document.getElementById("topic-detail");
+    if (!detail) return;
+    detail.innerHTML = '<div class="loading">loading ' + esc(topic) + '…</div>';
+    detail.scrollIntoView({ behavior: "smooth" });
+    var allCards = document.querySelectorAll(".topic-card");
+    for (var k = 0; k < allCards.length; k++) {
+      allCards[k].classList.remove("active");
+    }
+    var activeCard = document.querySelector('.topic-card[data-topic="' + topic + '"]');
+    if (activeCard) activeCard.classList.add("active");
+
+    cachedFetchWithRetry(API + "/popular?topic=" + encodeURIComponent(topic) + "&limit=10", {
+      timeout: 12000,
+      onSlow: function () {
+        var d = document.getElementById("topic-detail");
+        if (d) d.innerHTML = '<div class="loading">still loading ' + esc(topic) + '…</div>';
+      },
+    })
+      .then(function (data) {
+        var total = totalCountByTopic[topic] || 0;
+        var shown = Math.min(10, data.repos.length);
+        var titleHtml =
+          '<p class="section-label" style="margin-top: 1rem;">' +
+          'showing ' + shown + ' of ' + fmt(total) + ' <strong>' + esc(topic) + '</strong> repos &nbsp;' +
+          '<a href="/repo?repo=' + encodeURIComponent(data.repos[0]?.full_name || '') + '" ' +
+          'class="btn btn-outline" style="display:inline-block;font-size:0.75rem;">' +
+          'recommend from top</a>' +
+          '</p>';
+        detail.innerHTML = titleHtml + renderRepos(data.repos);
+      })
+      .catch(function (e) {
+        var msg = (e && e.message) || "failed to load";
+        detail.innerHTML =
+          '<div class="error">' + msg +
+          '<br><button type="button" class="btn btn-outline" style="margin-top:0.5rem;font-size:0.75rem;padding:0.3rem 0.7rem;" id="retry-topic">retry</button>' +
+          '</div>';
+        var rb = document.getElementById("retry-topic");
+        if (rb) rb.addEventListener("click", function () { loadTopicDetail(topic); });
+      });
+  }
+
+  function loadTopics() {
+    var el = document.getElementById("explore-container");
+    if (!el) return;
+    el.innerHTML = '<div class="loading" id="topics-loading">loading topics…</div>';
+
+    cachedFetchWithRetry(API + "/topics?limit=50", {
+      onSlow: function () {
+        var tl = document.getElementById("topics-loading");
+        if (tl) tl.textContent = "still loading…";
+      },
+    })
+      .then(function (data) {
+        var topics = (data.topics || []).filter(function (t) {
+          var skip = new Set([
+            "hacktoberfest", "hackertoberfest", "good-first-issue",
+            "hacktoberfest2022", "hacktoberfest2023", "hacktoberfest2024",
+            "hacktoberfest-accepted", "beginner-friendly", "first-timers-only",
+            "up-for-grabs", "easy", "help-wanted", "hackoctoberfest",
+            "hacktoberfest2020", "hacktoberfest2021",
+          ]);
+          return !skip.has(t.topic) && t.topic.length < 40;
+        }).slice(0, 40);
+
+        for (var i = 0; i < topics.length; i++) {
+          totalCountByTopic[topics[i].topic] = topics[i].count;
+        }
+
+        var html = '<div class="topic-grid">';
+        for (var i = 0; i < topics.length; i++) {
+          var t = topics[i];
+          var popBadge = "";
+          if (t.count > 1000) popBadge = ' <span class="topic-pop-badge">top</span>';
+          else if (t.count > 300) popBadge = ' <span class="topic-pop-badge topic-pop-active">active</span>';
+          html +=
+            '<button class="topic-card" data-topic="' + t.topic + '">' +
+            '<span class="topic-name">' + esc(t.topic) + '</span>' +
+            '<span class="topic-count">' + fmt(t.count) + ' repos' + popBadge + '</span>' +
+            '</button>';
+        }
+        html += '</div><div id="topic-detail"></div>';
+        el.innerHTML = html;
+
+        var cards = el.querySelectorAll(".topic-card");
+        for (var j = 0; j < cards.length; j++) {
+          cards[j].addEventListener("click", function () {
+            loadTopicDetail(this.getAttribute("data-topic"));
+          });
+        }
+      })
+      .catch(function (e) {
+        var msg = (e && e.message) || "failed to load topics";
+        el.innerHTML =
+          '<div class="error">' + msg +
+          '<br><button type="button" class="btn btn-outline" style="margin-top:0.75rem;font-size:0.75rem;padding:0.4rem 0.8rem;" id="retry-topics">retry</button>' +
+          '</div>';
+        var rb = document.getElementById("retry-topics");
+        if (rb) rb.addEventListener("click", function () { loadTopics(); });
+      });
+  }
+
+  function loadRandomPicks() {
+    var el = document.getElementById("random-picks");
+    if (!el) return;
+    el.innerHTML = '<div class="loading" style="grid-column: 1 / -1;">loading…</div>';
+
+    cachedFetchWithRetry(API + "/random?limit=8", {
+      onSlow: function () {
+        el.innerHTML = '<div class="loading" style="grid-column: 1 / -1;">still loading…</div>';
+      },
+    })
+      .then(function (data) {
+        var repos = (data.repos || []).slice(0, 4);
+        if (repos.length === 0) {
+          el.innerHTML = '<div class="loading" style="grid-column: 1 / -1;">no repos yet</div>';
+          return;
+        }
+        var html = "";
+        for (var i = 0; i < repos.length; i++) {
+          var r = repos[i];
+          var desc = r.description ? esc(r.description) : "(no description)";
+          html += '<a class="random-pick-card" href="/repo?repo=' + encodeURIComponent(r.full_name) + '">';
+          html += '<div class="random-pick-top"><span class="random-pick-name">' + esc(r.full_name) + '</span>';
+          html += '<span class="random-pick-stars">' + fmt(r.stars) + ' ★</span></div>';
+          html += '<div class="random-pick-desc">' + desc + '</div>';
+          html += '<div class="random-pick-meta">';
+          if (r.language) html += '<span class="badge badge-lang">' + esc(r.language) + '</span>';
+          html += '</div>';
+          html += '</a>';
+        }
+        el.innerHTML = html;
+      })
+      .catch(function (e) {
+        var msg = (e && e.message) || "failed to load";
+        el.innerHTML =
+          '<div class="error" style="grid-column: 1 / -1;">' + msg +
+          '<br><button type="button" class="btn btn-outline" style="margin-top:0.5rem;font-size:0.75rem;padding:0.3rem 0.7rem;" onclick="return window.loadRandomPicks && window.loadRandomPicks()">retry</button>' +
+          '</div>';
+      });
+  }
+
+  window.loadRandomPicks = loadRandomPicks;
+
+  function exploreRandom() {
+    var seed = Math.floor(Math.random() * 99999);
+    cachedFetchWithRetry(API + "/explore?seed=" + seed + "&limit=1")
+      .then(function (data) {
+        window.location.href = "/repo?repo=" + encodeURIComponent(data.source_repo);
+      })
+      .catch(function () {});
+  }
+
+  document.getElementById("roll-btn")?.addEventListener("click", exploreRandom);
+  document.getElementById("reroll-picks")?.addEventListener("click", loadRandomPicks);
+
+  var topicFilter = document.getElementById("topic-filter");
+  if (topicFilter) {
+    topicFilter.addEventListener("input", function () {
+      var q = this.value.toLowerCase().trim();
+      var cards = document.querySelectorAll(".topic-card");
+      var any = false;
+      for (var i = 0; i < cards.length; i++) {
+        var topic = cards[i].getAttribute("data-topic") || "";
+        if (!q || topic.toLowerCase().indexOf(q) !== -1) {
+          cards[i].style.display = "";
+          any = true;
+        } else {
+          cards[i].style.display = "none";
+        }
+      }
+      // clear detail if filter changes
+      var detail = document.getElementById("topic-detail");
+      if (detail && q) detail.innerHTML = "";
+    });
+  }
+
+  loadRandomPicks();
+  loadTopics();
+</script>
+
+<style is:inline>
+  .random-picks-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.85rem;
+    margin-bottom: 1.25rem;
+  }
+
+  @media (min-width: 600px) {
+    .random-picks-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  @media (min-width: 960px) {
+    .random-picks-grid {
+      grid-template-columns: 1fr 1fr 1fr 1fr;
+    }
+  }
+
+  .random-pick-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 1rem 1.2rem;
+    background: var(--bg-card);
+    backdrop-filter: var(--card-blur);
+    -webkit-backdrop-filter: var(--card-blur);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    box-shadow: var(--card-shadow);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.15s, background 0.15s, transform 0.05s;
+  }
+
+  .random-pick-card:hover {
+    border-color: var(--accent);
+    background: var(--bg-glass-hover);
+    transform: translateY(-1px);
+  }
+
+  .random-pick-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+
+  .random-pick-name {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .random-pick-stars {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .random-pick-desc {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .random-pick-meta {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: auto;
+  }
+
+  .random-pick-meta .badge {
+    font-size: 0.68rem;
+    padding: 0.15rem 0.5rem;
+  }
+
+  .topic-filter-input {
+    flex-shrink: 0;
+    margin-left: 0.75rem;
+    padding: 0.35rem 0.75rem;
+    background: var(--bg-glass);
+    backdrop-filter: var(--card-blur);
+    -webkit-backdrop-filter: var(--card-blur);
+    border: 1px solid var(--border-soft);
+    border-radius: 100px;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    width: 180px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .topic-filter-input:focus {
+    border-color: var(--accent);
+  }
+
+  .topic-filter-input::placeholder {
+    color: var(--text-dim);
+    opacity: 0.6;
+  }
+
+  .topic-pop-badge {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    padding: 0.08rem 0.4rem;
+    border-radius: 100px;
+    background: rgba(57, 211, 83, 0.18);
+    color: var(--accent);
+    margin-left: 0.35rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .topic-pop-badge.topic-pop-active {
+    background: rgba(88, 166, 255, 0.15);
+    color: #79c0ff;
+  }
+
+  .topic-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 0.65rem;
+  }
+
+  .topic-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.3rem;
+    padding: 0.85rem 1rem;
+    background: var(--bg-glass, rgba(13, 17, 23, 0.55));
+    backdrop-filter: blur(10px) saturate(1.2);
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
+    border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.06));
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.05s;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+  }
+
+  .topic-card:hover {
+    background: var(--bg-glass-hover, rgba(13, 17, 23, 0.7));
+    border-color: var(--accent, #39d353);
+  }
+
+  .topic-card.active {
+    background: rgba(57, 211, 83, 0.15);
+    border-color: var(--accent, #39d353);
+  }
+
+  .topic-name {
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: var(--accent, #39d353);
+    font-family: var(--font-mono, "Space Mono", monospace);
+  }
+
+  .topic-count {
+    font-size: 0.75rem;
+    opacity: 0.65;
+  }
+
+  .topic-repos {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .repo-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.85rem 1.1rem;
+    background: var(--bg-glass, rgba(13, 17, 23, 0.55));
+    backdrop-filter: blur(10px) saturate(1.2);
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
+    border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.06));
+    border-radius: 10px;
+    text-decoration: none;
+    color: inherit;
+    font-size: 1rem;
+    transition: background 0.15s, border-color 0.15s;
+  }
+
+  .repo-chip:hover {
+    background: var(--bg-glass-hover, rgba(13, 17, 23, 0.7));
+    border-color: var(--accent, #39d353);
+  }
+
+  .repo-chip strong {
+    color: var(--text, #e6edf3);
+    font-family: var(--font-mono, "Space Mono", monospace);
+    font-weight: 700;
+  }
+
+  .badge-lang {
+    font-size: 0.78rem;
+    padding: 0.3rem 0.65rem;
+    background: rgba(57, 211, 83, 0.1);
+    border: 1px solid rgba(57, 211, 83, 0.25);
+    border-radius: 100px;
+    color: var(--accent, #39d353);
+    font-family: var(--font-mono, "Space Mono", monospace);
+  }
+</style>

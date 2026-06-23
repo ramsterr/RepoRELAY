@@ -1,0 +1,516 @@
+---
+import "../styles/global.css";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RepoRelay — find repos worth your time</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="preload"
+      as="style"
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400..700;1,14..32,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400..700;1,14..32,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <script is:inline>
+      (function () {
+        try {
+          var stored = localStorage.getItem("rr-theme");
+          if (stored === "light" || stored === "dark") {
+            document.documentElement.setAttribute("data-theme", stored);
+          } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+            document.documentElement.setAttribute("data-theme", "light");
+          } else {
+            document.documentElement.setAttribute("data-theme", "dark");
+          }
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
+    <script is:inline>
+      (function () {
+        function mulberry32(a) {
+          return function () {
+            a |= 0; a = (a + 0x6d2b79f5) | 0;
+            var t = a;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+          };
+        }
+
+        function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+        function lerp(a, b, t) { return a + (b - a) * t; }
+
+        function makeNoise(rand) {
+          var grid = [];
+          for (var i = 0; i < 64; i++) { grid[i] = []; for (var j = 0; j < 64; j++) grid[i][j] = rand(); }
+          return function (x, y) {
+            var xi = Math.floor(x) & 63, yi = Math.floor(y) & 63;
+            var xf = x - Math.floor(x), yf = y - Math.floor(y);
+            var tl = grid[yi][xi], tr = grid[yi][(xi + 1) & 63];
+            var bl = grid[(yi + 1) & 63][xi], br = grid[(yi + 1) & 63][(xi + 1) & 63];
+            var sx = xf * xf * (3 - 2 * xf), sy = yf * yf * (3 - 2 * yf);
+            return lerp(lerp(tl, tr, sx), lerp(bl, br, sx), sy);
+          };
+        }
+
+        function makeSeeds(rand, cols, rows, count) {
+          var s = [];
+          for (var i = 0; i < count; i++) s.push({ x: rand() * cols, y: rand() * rows });
+          return s;
+        }
+        function nearestDistSq(x, y, seeds) {
+          var best = 1e9;
+          for (var i = 0; i < seeds.length; i++) {
+            var dx = x - seeds[i].x, dy = y - seeds[i].y;
+            var d2 = dx * dx + dy * dy;
+            if (d2 < best) best = d2;
+          }
+          return best;
+        }
+
+        var ARTS = [
+          { name: "aurora",    icon: "✦" },
+          { name: "ocean",     icon: "≈" },
+          { name: "stars",     icon: "⋆" },
+          { name: "peaks",     icon: "⩘" },
+          { name: "gems",      icon: "◇" },
+          { name: "heart",     icon: "♥" },
+          { name: "ripples",   icon: "⊙" },
+          { name: "forest",    icon: "⫾" },
+          { name: "matrix",    icon: "⏐" },
+          { name: "comb",      icon: "⬢" },
+          { name: "bloom",     icon: "✿" },
+          { name: "burst",     icon: "✹" },
+          { name: "waves",     icon: "〰" },
+          { name: "chess",     icon: "▣" }
+        ];
+
+        var patterns = [
+          function (c, r, cols, rows) {
+            var noise = makeNoise(r);
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var ny = y / rows;
+              var wave = Math.sin(x * 0.025 + noise(x * 0.03, y * 0.06) * 5) * 0.5 + 0.5;
+              var fade = 1 - ny * 0.85;
+              var shimmer = 0.65 + 0.35 * noise(x * 0.08 + 50, y * 0.04 + 30);
+              this.push(wave * fade * shimmer);
+            }
+          },
+          function (c, r, cols, rows) {
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var nx = x / cols, ny = y / rows;
+              var s1 = Math.sin(nx * 12 + ny * 2) * 0.5 + 0.5;
+              var s2 = Math.sin(nx * 7 - ny * 4 + 2) * 0.5 + 0.5;
+              var s3 = Math.sin(nx * 18 + ny * 6 + 5) * 0.5 + 0.5;
+              var depth = (s1 * 0.45 + s2 * 0.3 + s3 * 0.25) * (1 - ny * 0.7);
+              var foam = (ny < 0.12) ? 0.15 * (1 - ny / 0.12) : 0;
+              this.push(clamp(depth + foam, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            var minDim = Math.min(cols, rows);
+            var cx = cols / 2, cy = rows / 2;
+            var noise = makeNoise(r);
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var dx = (x - cx) / minDim, dy = (y - cy) / minDim;
+              var dist = Math.sqrt(dx * dx + dy * dy);
+              var angle = Math.atan2(dy, dx);
+              var logR = Math.log(1 + dist * 2.5);
+              var spiral = (Math.sin(angle * 2.5 + logR * 5) * 0.5 + 0.5);
+              var armFade = clamp(1 - dist * 1.8, 0, 1);
+              var arm = spiral * armFade * 0.6;
+              var n = noise(x * 0.12, y * 0.12);
+              var star = (n > 0.86) ? 0.7 + (n - 0.86) * 6 : 0;
+              this.push(clamp(arm + star * 0.65, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            var ridges = [];
+            for (var i = 0; i < 5; i++) ridges.push({ x: r() * cols, h: 0.3 + r() * 0.6, w: 0.15 + r() * 0.25 });
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var nx = x / cols, ny = y / rows;
+              var peak = 0;
+              for (var i = 0; i < ridges.length; i++) {
+                var r2 = ridges[i], nx2 = r2.x / cols;
+                var d = Math.abs(nx - nx2) / r2.w;
+                if (d < 1) { var h = r2.h * (1 - d * d); if (h > peak) peak = h; }
+              }
+              var base = (1 - ny) * 0.25;
+              var value = clamp(peak * 0.8 + base * 0.3, 0, 1);
+              var jitter = (r() - 0.5) * 0.08;
+              this.push(clamp(value + jitter, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var dx = Math.abs((x % 10) - 5), dy = Math.abs((y % 10) - 5);
+              var dist = dx + dy;
+              var value = clamp(1 - dist / 8, 0, 1);
+              var shimmer = 0.8 + 0.2 * (r() - 0.5);
+              this.push(clamp(value * shimmer, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            var cx = cols / 2, cy = rows / 2 - rows * 0.06;
+            var s = Math.min(cols, rows) * 0.28;
+            var noise = makeNoise(r);
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var nx = (x - cx) / s, ny = -(y - cy) / s;
+              var inside = Math.pow(nx * nx + ny * ny - 1, 3) - nx * nx * ny * ny * ny <= 0.02;
+              var bg = noise(x * 0.08, y * 0.08) * 0.12;
+              this.push(clamp(inside ? 0.8 : bg, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            var minDim = Math.min(cols, rows);
+            var cx = cols * (0.3 + r() * 0.4);
+            var cy = rows * (0.3 + r() * 0.4);
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var dx = (x - cx) / minDim, dy = (y - cy) / minDim;
+              var dist = Math.sqrt(dx * dx + dy * dy);
+              var w1 = Math.sin(dist * 8) * 0.5 + 0.5;
+              var w2 = Math.sin(dist * 4 + 1.5) * 0.3;
+              var w3 = Math.sin(dist * 2 + 3) * 0.2;
+              var wave = (w1 + w2 + w3) / 1.5;
+              var fade = 1 - Math.min(1, dist * 1.5);
+              this.push(clamp(wave * fade, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            var noise = makeNoise(r);
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var ny = y / rows, nx = x / cols;
+              var treeHeight = 0.4 + noise(x * 0.18, 0) * 0.5;
+              var treeTop = 1 - treeHeight;
+              var v;
+              if (ny < treeTop) {
+                var starN = noise(x * 0.5, y * 0.5);
+                v = starN > 0.93 ? 0.55 + (starN - 0.93) * 7 : 0;
+              } else {
+                var colMod = x % 4;
+                var distFromTrunk = Math.abs(colMod - 1.5);
+                var foliage = clamp(1 - distFromTrunk / 2.5, 0, 1) * 0.7;
+                var trunk = distFromTrunk < 0.5 ? 0.5 : 0;
+                var jitter = noise(x * 0.3, y * 0.3) * 0.2;
+                v = clamp(trunk + foliage + jitter, 0, 1) * clamp(1 - (ny - treeTop) * 0.3, 0, 1);
+              }
+              this.push(clamp(v, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            var noise = makeNoise(r);
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var nx = x / cols, ny = y / rows;
+              var colPhase = noise(nx * 4, 0) * 5;
+              var streamY = (ny * 8 + colPhase) % 1;
+              var v = 0;
+              if (streamY < 0.4) v = (1 - streamY / 0.4) * 0.9;
+              v *= 0.6 + 0.4 * noise(nx * 8, ny * 4);
+              this.push(clamp(v, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            var minDim = Math.min(cols, rows);
+            var size = Math.max(2.5, minDim / 24);
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var row = Math.floor(y / (size * 1.5));
+              var isOddRow = row % 2;
+              var hx = (Math.floor(x / (size * 1.732)) + (isOddRow ? 0.5 : 0)) * size * 1.732;
+              var hy = row * size * 1.5;
+              var dx = x - hx, dy = y - hy;
+              var dist = Math.sqrt(dx * dx + dy * dy);
+              var v = clamp(1 - dist / size, 0, 1);
+              if (dist > size * 0.65 && dist < size * 0.82) v = Math.max(v, 0.6);
+              this.push(v);
+            }
+          },
+          function (c, r, cols, rows) {
+            var minDim = Math.min(cols, rows);
+            var cx = cols / 2, cy = rows / 2;
+            var maxR = minDim * 0.45;
+            var nPoints = 60;
+            var points = [];
+            for (var i = 0; i < nPoints; i++) {
+              var theta = i * 137.5 * Math.PI / 180;
+              var rr = Math.sqrt(i) / Math.sqrt(nPoints) * maxR;
+              points.push({ x: cx + rr * Math.cos(theta), y: cy + rr * Math.sin(theta) });
+            }
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var minD2 = 1e9;
+              for (var i = 0; i < points.length; i++) {
+                var dx = x - points[i].x, dy = y - points[i].y;
+                var d2 = dx * dx + dy * dy;
+                if (d2 < minD2) minD2 = d2;
+              }
+              var dist = Math.sqrt(minD2);
+              this.push(clamp(1 - dist / (minDim * 0.035), 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            var cx = cols / 2, cy = rows / 2;
+            var rays = 14 + Math.floor(r() * 8);
+            var minDim = Math.min(cols, rows);
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var angle = Math.atan2(y - cy, x - cx);
+              var dist = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) / minDim;
+              var rayVal = Math.pow(Math.abs(Math.cos(angle * rays / 2)), 2.5);
+              var v = rayVal * clamp(1 - dist * 1.6, 0, 1);
+              this.push(clamp(v, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              var w1 = Math.sin(x * 0.08 + y * 0.04) * 0.5 + 0.5;
+              var w2 = Math.sin(x * 0.04 - y * 0.06 + 1.5) * 0.3;
+              var w3 = Math.sin(x * 0.13 + 2) * 0.15;
+              this.push(clamp(w1 + w2 + w3, 0, 1));
+            }
+          },
+          function (c, r, cols, rows) {
+            var s = 4;
+            for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+              this.push(((Math.floor(x / s) + Math.floor(y / s)) % 2) ? 0.6 : 0.08);
+            }
+          }
+        ];
+
+        var BASE_CELLS = [16, 12, 14, 14, 20, 22, 14, 12, 10, 18, 8, 14, 12, 20];
+        var WEIGHTS = [55, 18, 12, 9, 6];
+
+        function pickClass(v) {
+          var r2 = v * 100;
+          var acc = 0;
+          for (var i = 0; i < WEIGHTS.length; i++) { acc += WEIGHTS[i]; if (r2 < acc) return i; }
+          return 0;
+        }
+
+        function computeCell(patternIndex, vw, vh) {
+          var base = BASE_CELLS[patternIndex];
+          var ref = Math.min(vw, vh);
+          var scale = Math.max(0.7, Math.min(1.5, ref / 700));
+          return Math.max(7, Math.round(base * scale));
+        }
+
+        function fallbackGradient(rows, cols) {
+          var v = [];
+          for (var y = 0; y < rows; y++) {
+            for (var x = 0; x < cols; x++) {
+              v.push((1 - y / rows) * 0.5);
+            }
+          }
+          return v;
+        }
+
+        var currentArt = -1;
+
+        function renderSVG(values, cols, rows, cell) {
+          var w = window.innerWidth, h = window.innerHeight;
+          var parts = [];
+          parts.push('<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"',
+            ' viewBox="0 0 ', w, ' ', h,
+            '" preserveAspectRatio="xMidYMid slice" shape-rendering="crispEdges">');
+          for (var y = 0; y < rows; y++) {
+            for (var x = 0; x < cols; x++) {
+              var cls = pickClass(values[y * cols + x]);
+              parts.push('<rect class="c', cls, '" x="', x * cell, '" y="', y * cell,
+                '" width="', cell, '" height="', cell, '"/>');
+            }
+          }
+          parts.push('</svg>');
+          return parts.join('');
+        }
+
+        function generate(patternIndex) {
+          var old = document.getElementById("commit-grid");
+          if (old) old.remove();
+
+          var w = Math.max(1, window.innerWidth);
+          var h = Math.max(1, window.innerHeight);
+          var pi = (patternIndex === undefined || patternIndex === null || patternIndex < 0)
+            ? Math.floor(Math.random() * patterns.length) : patternIndex;
+          if (pi >= patterns.length) pi = 0;
+          currentArt = pi;
+
+          var cell = computeCell(pi, w, h);
+          var cols = Math.ceil(w / cell) + 1;
+          var rows = Math.ceil(h / cell) + 1;
+          var values = [];
+          try {
+            var seed = Math.floor(Math.random() * 2147483647);
+            var rand = mulberry32(seed);
+            patterns[pi].call(values, null, rand, cols, rows);
+          } catch (err) {
+            values = fallbackGradient(rows, cols);
+          }
+          if (!values || values.length !== rows * cols) {
+            values = fallbackGradient(rows, cols);
+          }
+
+          var wrap = document.createElement("div");
+          wrap.innerHTML = renderSVG(values, cols, rows, cell);
+          var svg = wrap.firstChild;
+          if (svg) {
+            svg.id = "commit-grid";
+            document.body.appendChild(svg);
+          }
+          updateArtPickerActive();
+        }
+
+        function generatePreview(patternIndex, size) {
+          size = size || 8;
+          var cell = Math.max(6, Math.floor(72 / size));
+          var values = [];
+          try {
+            var seed = patternIndex * 2654435761 + 42;
+            var rand = mulberry32(seed);
+            patterns[patternIndex].call(values, null, rand, size, size);
+          } catch (e) {
+            values = fallbackGradient(size, size);
+          }
+          return renderSVG(values, size, size, cell);
+        }
+
+        function updateArtPickerActive() {
+          var opts = document.querySelectorAll(".art-option");
+          for (var i = 0; i < opts.length; i++) {
+            var idx = parseInt(opts[i].getAttribute("data-art"));
+            if (idx === currentArt) opts[i].classList.add("active");
+            else opts[i].classList.remove("active");
+          }
+        }
+
+        function buildArtPicker() {
+          var panel = document.getElementById("art-picker-panel");
+          if (!panel) return;
+          var html = '<button class="art-option art-random" data-art="-1"><div class="art-preview">⤮</div><span class="art-name">random</span></button>';
+          for (var i = 0; i < ARTS.length; i++) {
+            html += '<button class="art-option" data-art="' + i + '">';
+            html += '<div class="art-preview" data-art="' + i + '"></div>';
+            html += '<span class="art-name">' + ARTS[i].name + '</span>';
+            html += '</button>';
+          }
+          panel.innerHTML = html;
+          var previews = panel.querySelectorAll('.art-preview[data-art]');
+          for (var j = 0; j < previews.length; j++) {
+            var idx = parseInt(previews[j].getAttribute("data-art"));
+            previews[j].innerHTML = generatePreview(idx, 8);
+          }
+        }
+
+        function attachArtPickerHandlers() {
+          var btn = document.getElementById("art-picker-btn");
+          var panel = document.getElementById("art-picker-panel");
+          if (!btn || !panel) return;
+          function open() { panel.classList.add("open"); btn.setAttribute("aria-expanded", "true"); }
+          function close() { panel.classList.remove("open"); btn.setAttribute("aria-expanded", "false"); }
+          function toggle() { if (panel.classList.contains("open")) close(); else open(); }
+          btn.addEventListener("click", function (e) { e.stopPropagation(); toggle(); });
+          document.addEventListener("click", function (e) {
+            if (!panel.contains(e.target) && e.target !== btn) close();
+          });
+          document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+          panel.addEventListener("click", function (e) {
+            var opt = e.target.closest(".art-option");
+            if (!opt) return;
+            var idx = parseInt(opt.getAttribute("data-art"));
+            try { localStorage.setItem("rr-art", String(idx)); } catch (e2) {}
+            generate(idx);
+            close();
+          });
+        }
+
+        var savedArt = -1;
+        try {
+          var raw = localStorage.getItem("rr-art");
+          var p = parseInt(raw);
+          if (!isNaN(p) && p >= 0 && p < patterns.length) savedArt = p;
+        } catch (e) {}
+
+        var resizeTimer = null;
+        function schedule() {
+          if (resizeTimer) clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(function () { generate(currentArt); }, 200);
+        }
+
+        function init() {
+          buildArtPicker();
+          attachArtPickerHandlers();
+          generate(savedArt);
+          window.addEventListener("resize", schedule);
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init);
+        } else {
+          init();
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <main>
+      <nav>
+        <a href="/" class="logo">RepoRelay</a>
+        <div class="links">
+          <a href="/" class:list={[Astro.url.pathname === "/" ? "active" : ""]}>home</a>
+          <a href="/explore" class:list={[Astro.url.pathname === "/explore" ? "active" : ""]}>explore</a>
+          <a href="https://github.com/ramsterr/RepoRELAY" target="_blank" rel="noopener" class="github-link">github</a>
+          <div class="art-picker">
+            <button id="art-picker-btn" class="art-picker-btn" type="button" aria-label="Change art" title="Change art" aria-expanded="false">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+                <rect x="0" y="0" width="3" height="3" rx="0.5"/>
+                <rect x="5.5" y="0" width="3" height="3" rx="0.5"/>
+                <rect x="11" y="0" width="3" height="3" rx="0.5"/>
+                <rect x="0" y="5.5" width="3" height="3" rx="0.5"/>
+                <rect x="5.5" y="5.5" width="3" height="3" rx="0.5"/>
+                <rect x="11" y="5.5" width="3" height="3" rx="0.5"/>
+                <rect x="0" y="11" width="3" height="3" rx="0.5"/>
+                <rect x="5.5" y="11" width="3" height="3" rx="0.5"/>
+                <rect x="11" y="11" width="3" height="3" rx="0.5"/>
+              </svg>
+            </button>
+            <div class="art-picker-panel" id="art-picker-panel" role="menu"></div>
+          </div>
+          <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle theme">
+            <span class="theme-icon" aria-hidden="true">☀</span>
+          </button>
+        </div>
+      </nav>
+      <slot />
+    </main>
+    <div class="grid-vignette" aria-hidden="true"></div>
+    <script is:inline>
+      (function () {
+        var btn = document.getElementById("theme-toggle");
+        if (!btn) return;
+        var icon = btn.querySelector(".theme-icon");
+        function refresh() {
+          var t = document.documentElement.getAttribute("data-theme") || "dark";
+          icon.textContent = t === "dark" ? "☀" : "☾";
+          btn.setAttribute("aria-label", t === "dark" ? "Switch to light theme" : "Switch to dark theme");
+        }
+        refresh();
+        btn.addEventListener("click", function () {
+          var current = document.documentElement.getAttribute("data-theme") || "dark";
+          var next = current === "dark" ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme", next);
+          try { localStorage.setItem("rr-theme", next); } catch (e) {}
+          refresh();
+        });
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,30 @@
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_LINK_MODE=copy \
+    REPORE_LAY_LIGHTWEIGHT=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    PYTHONMALLOC=malloc \
+    MALLOC_TRIM_THRESHOLD_=65536 \
+    PYTHONOPTIMIZE=2
+
+RUN pip install --no-cache-dir uv
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+COPY packages/mvp ./packages/mvp
+COPY apps/mvp_api ./apps/mvp_api
+
+RUN uv sync --frozen --no-dev
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Model downloads at runtime on first embedding request (~5-9s).
+# HF_HOME is set above so it caches to disk and survives restarts.
+
+EXPOSE 8000
+
+CMD ["uv", "run", "--package", "reporelay-mvp-api", "uvicorn", "reporelay_mvp_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

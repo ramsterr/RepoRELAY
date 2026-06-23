@@ -1,41 +1,56 @@
-export type SlotName =
-  | "alternatives"
-  | "addons"
-  | "companions"
-  | "starters"
-  | "trending"
-  | "maintainer_wanted";
+const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 
-export interface Repo {
+export interface ScoredRepo {
   id: number;
   full_name: string;
   description: string | null;
-  stars: number;
   language: string | null;
   topics: string[];
-}
-
-export interface Slot {
-  name: SlotName;
-  repos: Repo[];
+  stars: number;
+  score: number;
+  features: Record<string, number>;
+  shared_topics: string[];
+  shared_language: boolean;
 }
 
 export interface RecommendResponse {
   source_repo: string;
-  slots: Slot[];
+  repos: ScoredRepo[];
 }
 
-export async function getRecommendations(
+export async function fetchRecommendations(
   repo: string,
-  limit: number,
+  limit = 10,
+  seed?: number,
+  tags?: string[],
 ): Promise<RecommendResponse> {
-  const base = import.meta.env.PUBLIC_API_URL ?? "http://localhost:8000";
-  const url = new URL("/recommend", base);
-  url.searchParams.set("repo", repo);
-  url.searchParams.set("limit", String(limit));
-  const res = await fetch(url);
+  const params = new URLSearchParams({ repo, limit: String(limit) });
+  if (seed !== undefined) params.set("seed", String(seed));
+  if (tags && tags.length > 0) params.set("tags", tags.join(","));
+  const res = await fetch(`${API}/recommend?${params}`);
   if (!res.ok) {
-    return { source_repo: repo, slots: [] };
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      (err as { detail?: string }).detail || `API error ${res.status}`,
+    );
   }
-  return (await res.json()) as RecommendResponse;
+  return res.json();
+}
+
+export async function fetchExplore(
+  seed: number,
+  limit = 10,
+): Promise<RecommendResponse> {
+  const params = new URLSearchParams({
+    seed: String(seed),
+    limit: String(limit),
+  });
+  const res = await fetch(`${API}/explore?${params}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      (err as { detail?: string }).detail || `API error ${res.status}`,
+    );
+  }
+  return res.json();
 }

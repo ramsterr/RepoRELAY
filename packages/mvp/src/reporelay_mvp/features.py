@@ -84,7 +84,7 @@ def compute_features(source: Repo, candidate: Repo, *, cosine_sim: float, filter
         popularity_sim=_popularity_sim(source.stars, candidate.stars),
         trending_boost=_clamp(candidate.trending_score),
         filter_cosine_sim=_clamp(filter_cosine_sim),
-        quality_signal=1.0 if candidate.embedding is not None else 0.2,
+        quality_signal=_quality_signal(candidate),
         language_diversity=divers_lang,
     )
 
@@ -112,3 +112,32 @@ def _popularity_sim(a: int, b: int) -> float:
 
 def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, value))
+
+
+def tag_match(user_tags: list[str], candidate_topics: list[str]) -> float:
+    """Exact tag matching — fallback when embeddings are unavailable.
+    1.0 = all user tags present in candidate topics.
+    0.0 = no overlap."""
+    if not user_tags or not candidate_topics:
+        return 0.0
+    ut = {t.lower() for t in user_tags}
+    ct = {t.lower() for t in candidate_topics}
+    inter = ut & ct
+    if not inter:
+        return 0.0
+    return len(inter) / len(ut)
+
+
+def _quality_signal(repo: Repo) -> float:
+    """Quality proxy when no embedding model is available.
+    Rewards repos that are well-documented in their metadata."""
+    s = 0.2
+    if repo.description and len(repo.description) > 60:
+        s += 0.3
+    if repo.topics and len(repo.topics) > 2:
+        s += 0.2
+    if repo.dependencies and len(repo.dependencies) > 5:
+        s += 0.2
+    if repo.language:
+        s += 0.1
+    return min(1.0, s)

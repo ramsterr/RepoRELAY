@@ -18,12 +18,6 @@ import logging
 from typing import Any
 
 import httpx
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 from reporelay_mvp import data
 from reporelay_mvp.embedding import embed_text
@@ -63,12 +57,6 @@ def _auth_client(token: str) -> httpx.AsyncClient:
     )
 
 
-@retry(
-    retry=retry_if_exception_type(_RateLimited),
-    wait=wait_exponential(multiplier=2, min=30, max=600),
-    stop=stop_after_attempt(3),
-    reraise=True,
-)
 async def _get(client: httpx.AsyncClient, path: str, **params: Any) -> dict[str, Any]:
     response = await client.get(path, params=params, follow_redirects=True)
     if response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0":

@@ -50,6 +50,35 @@ logger = logging.getLogger(__name__)
 
 SEARCH_LIMIT = 100  # how many fresh candidates to pull from GitHub per call
 
+# --- request-level rec cache (in-process, 10 min TTL) ---
+import time as _rec_time
+
+_rec_cache: dict[str, tuple[float, Any]] = {}
+_REC_CACHE_TTL = 600  # 10 minutes
+_REC_CACHE_MAX = 500  # evict oldest if exceeded
+
+
+def _rec_cache_key(full_name: str, seed: int | None, tags: list[str] | None) -> str:
+    tag_str = ",".join(sorted(tags or []))
+    return f"{full_name}:{seed}:{tag_str}"
+
+
+def _rec_cache_get(key: str, now: float) -> Any | None:
+    if key not in _rec_cache:
+        return None
+    ts, value = _rec_cache[key]
+    if now - ts >= _REC_CACHE_TTL:
+        del _rec_cache[key]
+        return None
+    return value
+
+
+def _rec_cache_set(key: str, now: float, value: Any) -> None:
+    if len(_rec_cache) >= _REC_CACHE_MAX:
+        oldest = min(_rec_cache, key=lambda k: _rec_cache[k][0])
+        del _rec_cache[oldest]
+    _rec_cache[key] = (now, value)
+
 _cached_search_results: dict[str, tuple[float, Any]] = {}
 _CACHE_TTL = 300
 _DISK_CACHE_TTL = 24 * 3600  # 24h — GitHub search results don't change fast
@@ -137,9 +166,6 @@ def _build_scored_repo(
     )
 
 
-_MIN_DB_POOL_FOR_SKIP = 200  # if DB pool is already this big, skip the GitHub search
-
-
 async def _find_proxy_embedding(session: Any, source: Repo) -> list[float] | None:
     """
     When a repo has no embedding, find the best-matched repo in the DB
@@ -203,6 +229,13 @@ async def recommend(
     if not owner or not name:
         raise LookupError(f"repo must be 'owner/name', got {full_name!r}")
 
+    cache_key = _rec_cache_key(full_name, seed, tags)
+    cache_now = _rec_time.monotonic()
+    cached = _rec_cache_get(cache_key, cache_now)
+    if cached is not None:
+        logger.info("rec cache hit for %s", cache_key)
+        return cached
+
     session = await data.get_session()
     try:
         source = await data.get_repo(session, full_name)
@@ -242,13 +275,15 @@ async def recommend(
         scored = await score_many(source, candidates, session=session, seed=seed, tags=tags, filter_embedding=filter_emb)
         final = rerank(source, scored, limit=limit, seed=seed)
 
-        _build_cosine_lookup(candidates)
+        cosine_lookup = _build_cosine_lookup(candidates)
         scored_repos: list[ScoredRepo] = []
         for repo, sc, features in final:
-            cosine_sim = _find_cosine(repo, candidates)
+            cosine_sim = cosine_lookup.get(repo.id, 0.0)
             scored_repos.append(_build_scored_repo(source, repo, sc, cosine_sim, features=features))
 
-        return ScoredRecommendation(source_repo=full_name, repos=scored_repos)
+        result = ScoredRecommendation(source_repo=full_name, repos=scored_repos)
+        _rec_cache_set(cache_key, cache_now, result)
+        return result
     finally:
         await session.close()
 
@@ -351,10 +386,10 @@ async def recommend_random(
         scored = await score_many(source, candidates, session=session, seed=seed)
         final = rerank(source, scored, limit=limit, seed=seed)
 
-        _build_cosine_lookup(candidates)
+        cosine_lookup = _build_cosine_lookup(candidates)
         scored_repos: list[ScoredRepo] = []
         for repo, sc, features in final:
-            cosine_sim = _find_cosine(repo, candidates)
+            cosine_sim = cosine_lookup.get(repo.id, 0.0)
             scored_repos.append(_build_scored_repo(source, repo, sc, cosine_sim, features=features))
 
         return ScoredRecommendation(source_repo=source.full_name, repos=scored_repos)
@@ -362,17 +397,8 @@ async def recommend_random(
         await session.close()
 
 
-_cosine_lookup: dict[int, float] = {}
-
-
 def _build_cosine_lookup(candidates: list[tuple[Any, float]]) -> dict[int, float]:
-    global _cosine_lookup
-    _cosine_lookup = {cand.id: sim for cand, sim in candidates}
-    return _cosine_lookup
-
-
-def _find_cosine(repo: Any, candidates: list[tuple[Any, float]]) -> float:
-    return _cosine_lookup.get(repo.id, 0.5)
+    return {cand.id: sim for cand, sim in candidates}
 
 
 async def recommend_dict(

@@ -26,32 +26,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from reporelay_mvp import data
 from reporelay_mvp.embedding import cosine_batch_one_vs_many
-from reporelay_mvp.features import compute_features
+from reporelay_mvp.features import compute_features, tag_match as _tag_match
 from reporelay_mvp.models import Features, Repo
 
 logger = logging.getLogger(__name__)
 
 WEIGHTS: dict[str, float] = {
-    "language_match": 0.10,
-    "topic_overlap": 0.20,
-    "cosine_sim": 0.30,
-    "dep_overlap": 0.08,
-    "popularity_sim": 0.12,
-    "trending_boost": 0.05,
-    "quality_signal": 0.10,
+    "language_match":    0.15,
+    "topic_overlap":     0.35,
+    "cosine_sim":        0.00,
+    "dep_overlap":       0.15,
+    "popularity_sim":    0.15,
+    "trending_boost":    0.10,
+    "quality_signal":    0.05,
     "language_diversity": 0.05,
 }
 
 TAG_WEIGHTS: dict[str, float] = {
-    "language_match": 0.08,
-    "topic_overlap": 0.30,
-    "cosine_sim": 0.22,
-    "filter_cosine_sim": 0.00,
-    "dep_overlap": 0.05,
-    "popularity_sim": 0.12,
-    "trending_boost": 0.03,
-    "quality_signal": 0.10,
-    "language_diversity": 0.10,
+    "language_match":    0.05,
+    "topic_overlap":     0.35,
+    "cosine_sim":        0.00,
+    "filter_cosine_sim": 0.25,
+    "dep_overlap":       0.08,
+    "popularity_sim":    0.12,
+    "trending_boost":    0.05,
+    "quality_signal":    0.05,
+    "language_diversity": 0.05,
 }
 
 
@@ -102,6 +102,12 @@ async def score_many(
 
     embeddings: dict[int, list[float]] = {}
     fc_by_id: dict[int, float] = {}
+
+    # Exact tag matching — works without the embedding model
+    if tags:
+        for cand, _ in candidates:
+            fc_by_id[cand.id] = _tag_match(tags, cand.topics)
+
     if filter_embedding:
         candidate_ids = [c.id for c, _ in candidates]
         if candidate_ids:
@@ -110,7 +116,8 @@ async def score_many(
             ids_ordered = [c.id for c, _ in candidates if c.id in embeddings]
             vecs_ordered = [embeddings[cid] for cid in ids_ordered]
             scores = cosine_batch_one_vs_many(filter_embedding, vecs_ordered)
-            fc_by_id = dict(zip(ids_ordered, scores, strict=True))
+            for cid, score in zip(ids_ordered, scores, strict=True):
+                fc_by_id[cid] = max(fc_by_id.get(cid, 0.0), score)
         else:
             logger.info("no candidate embeddings for semantic tag filter — falling back to topic overlap")
 

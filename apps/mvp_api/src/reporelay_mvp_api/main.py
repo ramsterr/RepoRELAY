@@ -15,10 +15,11 @@ import contextlib
 import logging
 import os
 import time as _time_mod
+from collections import defaultdict
 from typing import Literal
 
 import httpx as _httpx_mod
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -105,6 +106,42 @@ app.add_middleware(
 )
 
 app.state.github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+
+# per-IP rate limiting (in-process, windowed, no Redis dependency)
+_rate_limit_buckets: dict[str, list[float]] = defaultdict(list)
+_RATE_LIMIT_WINDOW_S = 60
+_RATE_LIMIT_RULES: dict[str, int] = {
+    "/recommend": 10,
+    "/explore":   10,
+    "/trending":   5,
+    "/random":    20,
+}
+
+
+@app.middleware("http")
+async def _rate_limit_middleware(request: Request, call_next):
+    path = request.url.path
+    max_req = _RATE_LIMIT_RULES.get(path)
+    if max_req is None:
+        return await call_next(request)
+
+    ip = request.client.host if request.client else "0.0.0.0"
+    now = _time_mod.monotonic()
+    window = now - _RATE_LIMIT_WINDOW_S
+
+    bucket = _rate_limit_buckets[ip]
+    # Clean expired entries for this IP only
+    if bucket and bucket[0] < window:
+        bucket[:] = [t for t in bucket if t > window]
+
+    if len(bucket) >= max_req:
+        raise HTTPException(
+            status_code=429,
+            detail="rate limit exceeded — wait before retrying",
+        )
+
+    bucket.append(now)
+    return await call_next(request)
 
 from reporelay_mvp_api.webhooks import router as webhooks_router
 

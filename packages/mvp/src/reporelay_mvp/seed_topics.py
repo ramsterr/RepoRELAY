@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TOPICS: list[str] = [
     "machine-learning", "deep-learning", "cybersecurity", "security",
-    "cloud-native", "kubernetes", "docker", "devops",
+    "kubernetes", "docker", "devops",
     "api", "graphql", "database", "postgresql",
     "react", "vue", "nextjs", "typescript",
-    "fastapi", "spring-boot", "backend", "frontend",
+    "fastapi", "spring-boot", "backend",
     "data-science", "data-engineering",
     "observability", "monitoring", "testing", "ci-cd",
     "microservices", "serverless", "blockchain",
@@ -38,7 +38,7 @@ DEFAULT_TOPICS: list[str] = [
     "design-system", "tailwindcss", "accessibility",
     "embedded", "networking", "compiler",
     "analytics", "visualization", "tutorial", "education",
-    "terraform", "ansible", "kubernetes-operator",
+    "terraform", "ansible",
     "generative-ai", "rag", "langchain",
 ]
 
@@ -48,7 +48,7 @@ async def seed_topics(
     topics: list[str] | None = None,
     per_topic: int = 200,
     min_stars: int = 20,
-    delay_s: float = 2.2,
+    delay_s: float = 3.0,
 ) -> int:
     if topics is None:
         topics = DEFAULT_TOPICS

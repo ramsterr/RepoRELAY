@@ -71,7 +71,7 @@ def _weighted_jaccard(a: list[str], b: list[str]) -> float:
     return inter_weight / union_weight
 
 
-def compute_features(source: Repo, candidate: Repo, *, cosine_sim: float, filter_cosine_sim: float = 0.0, description_cosine_sim: float = 0.0, readme_keyword_sim: float = 0.0) -> Features:
+def compute_features(source: Repo, candidate: Repo, *, cosine_sim: float, filter_cosine_sim: float = 0.0, description_cosine_sim: float = 0.0, readme_topic_sim: float = 0.0) -> Features:
     src_lang = source.language
     cand_lang = candidate.language
     same_lang = 1.0 if (src_lang and cand_lang and src_lang == cand_lang) else 0.0
@@ -83,7 +83,7 @@ def compute_features(source: Repo, candidate: Repo, *, cosine_sim: float, filter
         cosine_sim=_clamp(cosine_sim),
         description_sim=_description_sim(source.description, candidate.description),
         description_cosine_sim=_clamp(description_cosine_sim),
-        readme_keyword_sim=_clamp(readme_keyword_sim),
+        readme_topic_sim=_clamp(readme_topic_sim),
         dep_overlap=_jaccard(source.dependencies, candidate.dependencies),
         popularity_sim=_popularity_sim(source.stars, candidate.stars),
         trending_boost=_clamp(candidate.trending_score),
@@ -215,13 +215,21 @@ def _tokenize_readme(full_name: str, text: str) -> set[str]:
     return tokens
 
 
-def readme_keyword_sim(source_tokens: set[str], candidate_desc: str | None) -> float:
-    if not source_tokens:
+def readme_topic_sim(source_tokens: set[str], candidate_topics: list[str]) -> float:
+    """Match source README tokens against candidate topic tags.
+    Topics are curated labels with near-zero ambiguity — 'neural-network'
+    matches README token 'neural' unambiguously, while 'linux-kernel'
+    matches 'kernel' only in the OS domain.
+    
+    Uses substring matching so compound topics (deep-learning, neural-network)
+    match partial tokens from the README (learning, neural)."""
+    if not source_tokens or not candidate_topics:
         return 0.0
-    cand = _tokenize_desc(candidate_desc or "")
-    if not cand:
-        return 0.0
-    inter = source_tokens & cand
-    if not inter:
-        return 0.0
-    return len(inter) / len(source_tokens)
+    lower_topics = {t.lower() for t in candidate_topics}
+    matches = 0
+    for token in source_tokens:
+        for topic in lower_topics:
+            if token in topic:
+                matches += 1
+                break
+    return matches / len(source_tokens)

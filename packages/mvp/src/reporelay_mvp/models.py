@@ -61,7 +61,7 @@ class Features:
     cosine_sim: float
     description_sim: float = 0.0
     description_cosine_sim: float = 0.0
-    readme_keyword_sim: float = 0.0
+    readme_topic_sim: float = 0.0
     dep_overlap: float = 0.0
     popularity_sim: float = 0.0
     trending_boost: float = 0.0
@@ -76,7 +76,7 @@ class Features:
             "cosine_sim": self.cosine_sim,
             "description_sim": self.description_sim,
             "description_cosine_sim": self.description_cosine_sim,
-            "readme_keyword_sim": self.readme_keyword_sim,
+            "readme_topic_sim": self.readme_topic_sim,
             "dep_overlap": self.dep_overlap,
             "popularity_sim": self.popularity_sim,
             "trending_boost": self.trending_boost,

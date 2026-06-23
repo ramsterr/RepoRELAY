@@ -146,7 +146,7 @@ def _build_scored_repo(
     features: Features | None = None,
 ) -> ScoredRepo:
     feats = features if features is not None else compute_features(
-        source, repo, cosine_sim=cosine_sim, description_cosine_sim=0.0, readme_keyword_sim=0.0,
+        source, repo, cosine_sim=cosine_sim, description_cosine_sim=0.0, readme_topic_sim=0.0,
     )
     source_topic_set = set(source.topics)
     source_lang = source.language

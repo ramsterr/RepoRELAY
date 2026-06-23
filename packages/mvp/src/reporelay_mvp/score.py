@@ -37,7 +37,7 @@ WEIGHTS: dict[str, float] = {
     "cosine_sim":              0.15,
     "description_sim":         0.05,
     "description_cosine_sim":  0.15,
-    "readme_keyword_sim":      0.00,
+    "readme_topic_sim":        0.00,
     "dep_overlap":             0.12,
     "popularity_sim":          0.10,
     "trending_boost":          0.07,
@@ -51,7 +51,7 @@ TAG_WEIGHTS: dict[str, float] = {
     "cosine_sim":              0.10,
     "description_sim":         0.05,
     "description_cosine_sim":  0.10,
-    "readme_keyword_sim":      0.00,
+    "readme_topic_sim":        0.00,
     "filter_cosine_sim":       0.25,
     "dep_overlap":             0.08,
     "popularity_sim":          0.07,
@@ -87,7 +87,7 @@ def _readme_weights(weights: dict[str, float], has_readme: bool) -> dict[str, fl
     if not has_readme:
         return weights
     w = dict(weights)
-    w["readme_keyword_sim"] = 0.15
+    w["readme_topic_sim"] = 0.15
     w["topic_overlap"] = w.get("topic_overlap", 0.18) - 0.15
     return w
 
@@ -101,8 +101,8 @@ def _topicless_weights(weights: dict[str, float], has_topics: bool, has_readme: 
         return w
     half = moved / 2
     w["description_sim"] = w.get("description_sim", 0.0) + half
-    if has_readme and "readme_keyword_sim" in w:
-        w["readme_keyword_sim"] = w.get("readme_keyword_sim", 0.0) + half
+    if has_readme and "readme_topic_sim" in w:
+        w["readme_topic_sim"] = w.get("readme_topic_sim", 0.0) + half
     else:
         w["description_sim"] = w.get("description_sim", half) + half
     return w
@@ -165,7 +165,7 @@ async def score_many(
     filter_cosine_sim is computed per candidate. This gives semantic
     tag filtering — the tag text becomes a vector query.
 
-    When `source_readme_tokens` is provided, a readme_keyword_sim
+    When `source_readme_tokens` is provided, a readme_topic_sim
     feature is computed per candidate by Jaccard-matching the source's
     README tokens against each candidate's description tokens.
 
@@ -219,20 +219,20 @@ async def score_many(
     has_readme = source_readme_tokens is not None and len(source_readme_tokens) > 0
     has_topics = source.topics is not None and len(source.topics) > 0
     if has_readme:
-        from reporelay_mvp.features import readme_keyword_sim as _rks
-        rks_by_id: dict[int, float] = {}
+        from reporelay_mvp.features import readme_topic_sim as _rts
+        rts_by_id: dict[int, float] = {}
         for cand, _ in candidates:
-            rks_by_id[cand.id] = _rks(source_readme_tokens, cand.description)
+            rts_by_id[cand.id] = _rts(source_readme_tokens, cand.topics)
     else:
-        rks_by_id = {}
+        rts_by_id = {}
 
     for cand, cosine_sim in candidates:
         fc = fc_by_id.get(cand.id, 0.0)
         desc_cos = desc_cosine_by_id.get(cand.id, 0.0)
-        rks = rks_by_id.get(cand.id, 0.0) if has_readme else 0.0
+        rts = rts_by_id.get(cand.id, 0.0) if has_readme else 0.0
         features = compute_features(
             source, cand, cosine_sim=cosine_sim, filter_cosine_sim=fc,
-            description_cosine_sim=desc_cos, readme_keyword_sim=rks,
+            description_cosine_sim=desc_cos, readme_topic_sim=rts,
         )
         s = score_repo(features, seed=seed, use_tags=use_tags,
                         has_readme_emb=source_has_readme_emb,

@@ -58,19 +58,58 @@ async def _embed_one(
     except Exception as exc:
         logger.warning("embedding failed for %s/%s: %s", owner, name, exc)
         return False
-    await data.set_embedding(session, repo_id=repo_id, embedding=embedding)
+
+    # Write README embedding with Neon retry
+    if not await _safe_set_embedding(session, repo_id, embedding):
+        return False
 
     if description and description.strip():
         try:
             desc_emb = await embed_text(description)
-            await data.set_description_embedding(
-                session, repo_id=repo_id, description_embedding=desc_emb
-            )
+            await _safe_set_description(session, repo_id, desc_emb)
         except Exception as exc:
-            logger.warning(
-                "description embedding failed for %s/%s: %s", owner, name, exc
-            )
+            logger.warning("description embedding failed for %s/%s: %s", owner, name, exc)
     return True
+
+
+async def _safe_set_embedding(session: Any, repo_id: int, embedding: list[float]) -> bool:
+    try:
+        await data.set_embedding(session, repo_id=repo_id, embedding=embedding)
+        return True
+    except Exception as exc:
+        logger.warning("set_embedding failed for %d (Neon): %s", repo_id, exc)
+    try:
+        await session.rollback()
+        new_session = await data.get_session()
+        try:
+            await data.set_embedding(new_session, repo_id=repo_id, embedding=embedding)
+            await new_session.commit()
+            return True
+        finally:
+            await new_session.close()
+    except Exception as exc2:
+        logger.warning("retry also failed for %d: %s", repo_id, exc2)
+        return False
+
+
+async def _safe_set_description(session: Any, repo_id: int, desc_emb: list[float]) -> bool:
+    try:
+        await data.set_description_embedding(session, repo_id=repo_id, description_embedding=desc_emb)
+        return True
+    except Exception:
+        pass
+    try:
+        await session.rollback()
+        new_session = await data.get_session()
+        try:
+            await data.set_description_embedding(new_session, repo_id=repo_id, description_embedding=desc_emb)
+            await new_session.commit()
+            return True
+        finally:
+            await new_session.close()
+    except Exception as exc:
+        logger.warning("desc_embedding retry failed for %d: %s", repo_id, exc)
+        return False
 
 
 async def embed_top(

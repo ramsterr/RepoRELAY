@@ -32,10 +32,12 @@ def _get_sessionmaker() -> async_sessionmaker[AsyncSession]:
             pool_pre_ping=True,
             pool_size=5,
             max_overflow=3,
-            pool_recycle=60,
+            pool_recycle=300,
             connect_args={
                 "connect_timeout": 10,
-                "keepalives_idle": 30,
+                "keepalives_idle": 20,
+                "keepalives_interval": 5,
+                "keepalives_count": 3,
             },
         )
         _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)

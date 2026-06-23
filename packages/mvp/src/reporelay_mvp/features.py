@@ -138,7 +138,6 @@ _DESC_STOPWORDS = frozenset({
     "from", "not", "are", "was", "your", "all", "can", "has",
     "its", "use", "you", "but", "we", "no", "so", "if",
     "one", "which", "also", "more", "just", "been", "will",
-    "framework", "library", "tool", "build", "building",
 })
 _DESC_TOKEN_RE = re.compile(r"[a-z0-9_]+")
 
@@ -152,6 +151,20 @@ def _tokenize_desc(text: str) -> set[str]:
     return tokens
 
 
+def _tokenize_bigrams(text: str) -> set[str]:
+    words = [
+        m.group()
+        for m in _DESC_TOKEN_RE.finditer(text.lower())
+        if len(m.group()) > 1
+        and m.group() not in _DESC_STOPWORDS
+        and not m.group().isdigit()
+    ]
+    bigrams: set[str] = set()
+    for i in range(len(words) - 1):
+        bigrams.add(words[i] + " " + words[i + 1])
+    return bigrams
+
+
 def _description_sim(source_desc: str | None, candidate_desc: str | None) -> float:
     if not source_desc or not candidate_desc:
         return 0.0
@@ -162,8 +175,18 @@ def _description_sim(source_desc: str | None, candidate_desc: str | None) -> flo
     inter = src & cand
     if not inter:
         return 0.0
-    # Jaccard: |intersection| / |union|
-    return len(inter) / len(src | cand)
+    unigram = len(inter) / len(src | cand)
+
+    src_bi = _tokenize_bigrams(source_desc)
+    cand_bi = _tokenize_bigrams(candidate_desc)
+    if src_bi and cand_bi:
+        bi_inter = src_bi & cand_bi
+        bi_union = src_bi | cand_bi
+        bigram = len(bi_inter) / len(bi_union) if bi_union else 0.0
+    else:
+        bigram = 0.0
+
+    return unigram * 0.55 + bigram * 0.45
 
 
 def _quality_signal(repo: Repo) -> float:

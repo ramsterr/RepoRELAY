@@ -102,7 +102,7 @@ def test_description_sim_high_overlap():
         "async Python web framework for building APIs",
         "Python micro web framework for building applications",
     )
-    assert score > 0.2
+    assert score > 0.3
 
 
 def test_description_sim_no_overlap():

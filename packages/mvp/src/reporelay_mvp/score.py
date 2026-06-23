@@ -55,8 +55,18 @@ TAG_WEIGHTS: dict[str, float] = {
 }
 
 
-def _get_weights(seed: int | None, *, use_tags: bool = False) -> dict[str, float]:
+def _embedding_weights(weights: dict[str, float], has_embedding: bool) -> dict[str, float]:
+    if not has_embedding:
+        return weights
+    w = dict(weights)
+    w["cosine_sim"] = 0.25
+    w["topic_overlap"] = max(0.05, w.get("topic_overlap", 0.35) - 0.25)
+    return w
+
+
+def _get_weights(seed: int | None, *, use_tags: bool = False, has_embedding: bool = False) -> dict[str, float]:
     base = dict(TAG_WEIGHTS if use_tags else WEIGHTS)
+    base = _embedding_weights(base, has_embedding)
     if seed is None:
         return base
     rng = random.Random(seed)
@@ -69,9 +79,9 @@ def _get_weights(seed: int | None, *, use_tags: bool = False) -> dict[str, float
 
 
 def score_repo(
-    features: Features, *, seed: int | None = None, use_tags: bool = False
+    features: Features, *, seed: int | None = None, use_tags: bool = False, has_embedding: bool = False
 ) -> float:
-    weights = _get_weights(seed, use_tags=use_tags)
+    weights = _get_weights(seed, use_tags=use_tags, has_embedding=has_embedding)
     total: float = 0.0
     for name, weight in weights.items():
         total += getattr(features, name) * weight
@@ -100,6 +110,13 @@ async def score_many(
     use_tags = bool(tags)
     rng = random.Random(seed) if seed is not None else None
 
+    source_has_embedding = (
+        source.embedding is not None
+        and any(v != 0.0 for v in source.embedding)
+    )
+    if source_has_embedding:
+        logger.info("source %s has real embedding — enabling cosine_sim weight", source.full_name)
+
     embeddings: dict[int, list[float]] = {}
     fc_by_id: dict[int, float] = {}
 
@@ -127,7 +144,7 @@ async def score_many(
         features = compute_features(
             source, cand, cosine_sim=cosine_sim, filter_cosine_sim=fc
         )
-        s = score_repo(features, seed=seed, use_tags=use_tags)
+        s = score_repo(features, seed=seed, use_tags=use_tags, has_embedding=source_has_embedding)
         if rng is not None:
             s += rng.uniform(-0.08, 0.08)
         scored.append((cand, s, features))

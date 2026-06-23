@@ -77,16 +77,38 @@ def _readme_weights(weights: dict[str, float], has_readme: bool) -> dict[str, fl
     if not has_readme:
         return weights
     w = dict(weights)
-    # Give readme_keyword_sim weight by borrowing from topic_overlap
     w["readme_keyword_sim"] = 0.15
     w["topic_overlap"] = max(0.05, w.get("topic_overlap", 0.18) - 0.15)
     return w
 
 
-def _get_weights(seed: int | None, *, use_tags: bool = False, has_embedding: bool = False, has_readme_keywords: bool = False) -> dict[str, float]:
+def _topicless_weights(weights: dict[str, float], has_topics: bool, has_readme: bool) -> dict[str, float]:
+    if has_topics:
+        return weights
+    w = dict(weights)
+    moved = w.pop("topic_overlap", 0.0)
+    if moved <= 0:
+        return w
+    half = moved / 2
+    w["description_sim"] = w.get("description_sim", 0.0) + half
+    if has_readme and "readme_keyword_sim" in w:
+        w["readme_keyword_sim"] = w.get("readme_keyword_sim", 0.0) + half
+    else:
+        w["description_sim"] = w.get("description_sim", half) + half
+    return w
+
+
+def _get_weights(
+    seed: int | None, *,
+    use_tags: bool = False,
+    has_embedding: bool = False,
+    has_readme_keywords: bool = False,
+    has_topics: bool = False,
+) -> dict[str, float]:
     base = dict(TAG_WEIGHTS if use_tags else WEIGHTS)
     base = _embedding_weights(base, has_embedding)
     base = _readme_weights(base, has_readme_keywords)
+    base = _topicless_weights(base, has_topics, has_readme_keywords)
     if seed is None:
         return base
     rng = random.Random(seed)
@@ -101,9 +123,11 @@ def _get_weights(seed: int | None, *, use_tags: bool = False, has_embedding: boo
 def score_repo(
     features: Features, *, seed: int | None = None, use_tags: bool = False,
     has_embedding: bool = False, has_readme_keywords: bool = False,
+    has_topics: bool = False,
 ) -> float:
     weights = _get_weights(seed, use_tags=use_tags, has_embedding=has_embedding,
-                           has_readme_keywords=has_readme_keywords)
+                           has_readme_keywords=has_readme_keywords,
+                           has_topics=has_topics)
     total: float = 0.0
     for name, weight in weights.items():
         total += getattr(features, name) * weight
@@ -182,6 +206,7 @@ async def score_many(
 
     scored: list[tuple[Repo, float, Features]] = []
     has_readme = source_readme_tokens is not None and len(source_readme_tokens) > 0
+    has_topics = source.topics is not None and len(source.topics) > 0
     if has_readme:
         from reporelay_mvp.features import readme_keyword_sim as _rks
         rks_by_id: dict[int, float] = {}
@@ -200,7 +225,8 @@ async def score_many(
         )
         s = score_repo(features, seed=seed, use_tags=use_tags,
                         has_embedding=source_has_embedding,
-                        has_readme_keywords=has_readme)
+                        has_readme_keywords=has_readme,
+                        has_topics=has_topics)
         if rng is not None:
             s += rng.uniform(-0.08, 0.08)
         scored.append((cand, s, features))

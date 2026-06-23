@@ -36,9 +36,9 @@ from reporelay_mvp.features import compute_features
 from reporelay_mvp.github import (
     _auth_client,
     _search_item_to_repo,
-    enrich_repo,
+    fetch_dependencies,
+    fetch_readme,
     quick_save,
-    save_repo,
     search_repositories,
 )
 from reporelay_mvp.models import Features, Repo, ScoredRecommendation, ScoredRepo
@@ -171,19 +171,22 @@ def _build_scored_repo(
 async def _find_proxy_embedding(session: Any, source: Repo) -> list[float] | None:
     """
     When a repo has no embedding, find the best-matched repo in the DB
-    by topic overlap and borrow its embedding for pgvector search.
+    by topic overlap + language + comparable popularity and borrow its
+    embedding for pgvector search.
 
     Returns the proxy embedding or None if no good match exists.
     """
     if not source.topics:
         return None
 
+    import math as _math
+
     from sqlalchemy import text
 
     rows = await session.execute(
         text(
             """
-            SELECT id, embedding, topics
+            SELECT id, embedding, topics, language, stars
             FROM mvp_repos
             WHERE embedding IS NOT NULL
               AND topics && :topics
@@ -197,11 +200,16 @@ async def _find_proxy_embedding(session: Any, source: Repo) -> list[float] | Non
     best_embedding = None
     best_score = -1.0
     source_set = set(source.topics)
+    src_lang = source.language
+    src_stars = max(1, source.stars)
     for row in rows:
         cand_topics = list(row.topics or [])
         overlap = len(source_set & set(cand_topics))
-        if overlap > best_score:
-            best_score = overlap
+        lang_score = 1.0 if (src_lang and getattr(row, "language", None) == src_lang) else 0.0
+        star_score = min(1.0, _math.log1p(max(1, getattr(row, "stars", 0) or 0)) / _math.log1p(src_stars))
+        composite = overlap * 0.5 + lang_score * 0.3 + star_score * 0.2
+        if composite > best_score:
+            best_score = composite
             best_id = row.id
             emb_raw = row.embedding
             if isinstance(emb_raw, list):
@@ -251,8 +259,6 @@ async def recommend(
             if source is None:
                 raise LookupError(f"failed to fetch repo {full_name!r} from GitHub")
             is_cold = True
-            # Fire background task to fetch README + dependencies
-            asyncio.create_task(enrich_repo(owner, name))
 
         # If the source has no real embedding, borrow one from a
         # topic-similar repo in the DB. This gives instant pgvector-
@@ -267,33 +273,43 @@ async def recommend(
             else:
                 logger.info("no proxy embedding found for %s — topic/language matching only", full_name)
 
-        # Start parallel README fetch for cold repos — used as content signal
-        # when the source has no real README embedding.
-        readme_task = None
+        # Fetch README tokens + dependencies in parallel with candidate pool.
+        # Both signals are available for this request — no background wait.
+        cold_task = None
         if not source_has_readme_emb:
             settings = get_mvp_settings()
 
-            async def _fetch_and_tokenize():
+            async def _fetch_cold_signals():
                 try:
                     from reporelay_mvp.features import _tokenize_readme
 
                     async with _auth_client(settings.github_token) as client:
-                        readme_text = await fetch_readme(client, owner, name)
-                        return _tokenize_readme(full_name, readme_text)
+                        readme_text, deps = await asyncio.gather(
+                            fetch_readme(client, owner, name),
+                            fetch_dependencies(client, owner, name),
+                        )
+                    tokens = _tokenize_readme(full_name, readme_text) if readme_text.strip() else None
+                    return tokens, deps
                 except Exception:
-                    return None
+                    return None, []
 
-            readme_task = asyncio.create_task(_fetch_and_tokenize())
+            cold_task = asyncio.create_task(_fetch_cold_signals())
 
         candidates = await _expand_pool(session, source, seed=seed, tags=tags)
 
         source_readme_tokens = None
-        if readme_task:
-            source_readme_tokens = await readme_task
+        if cold_task:
+            source_readme_tokens, deps = await cold_task
             if source_readme_tokens:
                 logger.info(
                     "fetched README for %s — %d tokens for keyword matching",
                     full_name, len(source_readme_tokens),
+                )
+            if deps:
+                source = source.model_copy(update={"dependencies": deps})
+                logger.info(
+                    "fetched %d dependencies for %s — dep_overlap now active",
+                    len(deps), full_name,
                 )
 
         filter_emb = None

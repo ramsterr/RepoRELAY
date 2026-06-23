@@ -11,7 +11,7 @@ revision id: mvp_005_add_description_embedding
 """
 
 revision = "mvp_005"
-down_revision = "mvp_003"
+down_revision = "mvp_004"
 
 from collections.abc import Sequence
 

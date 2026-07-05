@@ -34,11 +34,11 @@ logger = logging.getLogger(__name__)
 
 WEIGHTS: dict[str, float] = {
     "language_match":          0.04,
-    "topic_overlap":           0.20,
+    "topic_overlap":           0.13,
     "cosine_sim":              0.10,
     "description_sim":         0.04,
     "description_cosine_sim":  0.27,
-    "readme_topic_sim":        0.08,
+    "readme_topic_sim":        0.15,
     "dep_overlap":             0.08,
     "popularity_sim":          0.05,
     "trending_boost":          0.05,
@@ -48,11 +48,11 @@ WEIGHTS: dict[str, float] = {
 
 TAG_WEIGHTS: dict[str, float] = {
     "language_match":          0.03,
-    "topic_overlap":           0.12,
+    "topic_overlap":           0.07,
     "cosine_sim":              0.08,
     "description_sim":         0.03,
     "description_cosine_sim":  0.20,
-    "readme_topic_sim":        0.05,
+    "readme_topic_sim":        0.10,
     "filter_cosine_sim":       0.25,
     "dep_overlap":             0.06,
     "popularity_sim":          0.05,
@@ -99,9 +99,9 @@ def _readme_weights(weights: dict[str, float], has_readme: bool) -> dict[str, fl
     # language signal — they match keywords like "chess" against
     # candidate topic tags even when source and candidate have no
     # shared topic.
-    boost = 0.07
+    boost = 0.05
     w["readme_topic_sim"] = w.get("readme_topic_sim", 0.0) + boost
-    w["topic_overlap"] = w.get("topic_overlap", 0.20) - boost
+    w["topic_overlap"] = w.get("topic_overlap", 0.13) - boost
     return w
 
 

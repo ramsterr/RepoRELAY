@@ -249,7 +249,6 @@ async def recommend(
     session = await data.get_session()
     try:
         source = await data.get_repo(session, full_name)
-        is_cold = False
         if source is None:
             logger.info("repo %s not in DB — quick-saving metadata + topics", full_name)
             await quick_save(owner, name)
@@ -258,59 +257,37 @@ async def recommend(
             source = await data.get_repo(session, full_name)
             if source is None:
                 raise LookupError(f"failed to fetch repo {full_name!r} from GitHub")
-            is_cold = True
 
-        # If the source has no real embedding, borrow one from a
-        # topic-similar repo in the DB. This gives instant pgvector-
-        # quality results for ANY pasted URL.
-        source_has_readme_emb = source.embedding is not None and any(v != 0.0 for v in source.embedding)
-
-        if not source_has_readme_emb:
-            proxy_emb = await _find_proxy_embedding(session, source)
-            if proxy_emb:
-                source = source.model_copy(update={"embedding": proxy_emb})
-                logger.info("using proxy embedding for %s — full pgvector pipeline", full_name)
-            else:
-                logger.info("no proxy embedding found for %s — topic/language matching only", full_name)
-
-        # Fetch README tokens + dependencies in parallel with candidate pool.
-        # Both signals are available for this request — no background wait.
-        cold_task = None
-        if not source_has_readme_emb:
-            settings = get_mvp_settings()
-
-            async def _fetch_cold_signals():
-                try:
-                    from reporelay_mvp.features import _tokenize_readme
-
-                    async with _auth_client(settings.github_token) as client:
-                        readme_text, deps = await asyncio.gather(
-                            fetch_readme(client, owner, name),
-                            fetch_dependencies(client, owner, name),
-                        )
-                    tokens = _tokenize_readme(full_name, readme_text) if readme_text.strip() else None
-                    return tokens, deps
-                except Exception:
-                    return None, []
-
-            cold_task = asyncio.create_task(_fetch_cold_signals())
-
-        candidates = await _expand_pool(session, source, seed=seed, tags=tags)
+        # Check if source has real vectors. If not, embed description + README
+        # live via Gemini API. This gives real recommendations on first visit
+        # instead of borrowing a proxy vector from a random similar repo.
+        source_has_desc_emb = (
+            source.description_embedding is not None
+            and any(v != 0.0 for v in source.description_embedding)
+        )
+        source_has_readme_emb = (
+            source.embedding is not None
+            and any(v != 0.0 for v in source.embedding)
+        )
+        source_needs_embed = not source_has_desc_emb or not source_has_readme_emb
 
         source_readme_tokens = None
-        if cold_task:
-            source_readme_tokens, deps = await cold_task
-            if source_readme_tokens:
-                logger.info(
-                    "fetched README for %s — %d tokens for keyword matching",
-                    full_name, len(source_readme_tokens),
-                )
+        if source_needs_embed:
+            logger.info("repo %s has no real vectors — embedding live via Gemini", full_name)
+            source, source_readme_tokens, deps = await _embed_source_live(
+                source, owner, name, session,
+            )
             if deps:
                 source = source.model_copy(update={"dependencies": deps})
-                logger.info(
-                    "fetched %d dependencies for %s — dep_overlap now active",
-                    len(deps), full_name,
-                )
+            logger.info(
+                "live embedding complete for %s (desc=%s, readme=%s, tokens=%d)",
+                full_name,
+                "yes" if source.description_embedding and any(v != 0.0 for v in source.description_embedding) else "no",
+                "yes" if source.embedding and any(v != 0.0 for v in source.embedding) else "no",
+                len(source_readme_tokens) if source_readme_tokens else 0,
+            )
+
+        candidates = await _expand_pool(session, source, seed=seed, tags=tags)
 
         filter_emb = None
         if tags:
@@ -335,6 +312,71 @@ async def recommend(
         return result
     finally:
         await session.close()
+
+
+async def _embed_source_live(
+    source: Repo,
+    owner: str,
+    name: str,
+    session: Any,
+) -> tuple[Repo, set[str] | None, list[str]]:
+    """Fetch README + embed description + embed README via live Gemini API.
+
+    Stores vectors in DB so future visits are instant (no API call needed).
+
+    Returns (updated_source, readme_tokens, dependencies).
+    """
+    settings = get_mvp_settings()
+    deps: list[str] = []
+    readme_text: str = ""
+
+    # 1. Fetch README + dependencies from GitHub
+    try:
+        async with _auth_client(settings.github_token) as client:
+            readme_text, deps = await asyncio.gather(
+                fetch_readme(client, owner, name),
+                fetch_dependencies(client, owner, name),
+            )
+    except Exception as exc:
+        logger.warning("GitHub fetch failed for %s/%s: %s", owner, name, exc)
+        return source, None, []
+
+    # 2. Embed and store description (source.description from quick_save)
+    if source.description and source.description.strip():
+        try:
+            desc_emb = await embed_text(source.description)
+            await data.set_description_embedding(
+                session, repo_id=source.id, description_embedding=desc_emb,
+            )
+            source = source.model_copy(update={"description_embedding": desc_emb})
+            logger.info("  embedded description for %s/%s", owner, name)
+        except Exception as exc:
+            logger.warning("description embedding failed for %s/%s: %s", owner, name, exc)
+
+    # 3. Embed and store README
+    if readme_text and readme_text.strip():
+        try:
+            embedding = await embed_text(readme_text[:8000])
+            await data.set_embedding(session, repo_id=source.id, embedding=embedding)
+            source = source.model_copy(update={"embedding": embedding})
+            logger.info("  embedded README for %s/%s", owner, name)
+        except Exception as exc:
+            logger.warning("README embedding failed for %s/%s: %s", owner, name, exc)
+
+    # 4. Extract README tokens for keyword matching (readme_topic_sim)
+    readme_tokens: set[str] | None = None
+    if readme_text and readme_text.strip():
+        from reporelay_mvp.features import _tokenize_readme
+
+        readme_tokens = _tokenize_readme(source.full_name, readme_text)
+
+    # 5. Persist to DB so next visit is instant
+    try:
+        await session.commit()
+    except Exception as exc:
+        logger.warning("DB commit failed after live embed: %s", exc)
+
+    return source, readme_tokens, deps
 
 
 async def _expand_pool(

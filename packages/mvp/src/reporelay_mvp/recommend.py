@@ -454,15 +454,48 @@ async def _expand_pool(
     settings = get_mvp_settings()
     search_items: list[dict[str, Any]] = []
     try:
+        # Seed-aware GitHub search: pick different topics, sort orders,
+        # and pages so different seeds produce genuinely different candidates.
+        # Without this, every seed returns the same popular repos sorted
+        # by stars — which makes the top recommendations redundant.
+        topics_for_search: list[str] | None = None
+        sort_for_search = "stars"
+        page_for_search = 1
+        search_language: str | None = source.language
+
+        if seed is not None:
+            import random as _rnd
+            rng = _rnd.Random(seed)
+
+            # Pick a random topic (not always the first/language topic)
+            if source.topics:
+                # Filter out the language topic if there are better topics available
+                good_topics = [t for t in source.topics if t.lower() != (source.language or "").lower()]
+                if good_topics and rng.random() < 0.6:
+                    topics_for_search = [rng.choice(good_topics)]
+                elif source.topics:
+                    topics_for_search = [rng.choice(source.topics)]
+
+            # Vary sort order (stars, updated, forks)
+            sort_options = ["stars", "updated", "forks"]
+            sort_for_search = rng.choice(sort_options)
+
+            # Vary page
+            page_for_search = rng.randint(1, 3)
+
+            # 25% chance: search without language to get cross-language results
+            if rng.random() < 0.25:
+                search_language = None
+
         async with _auth_client(settings.github_token) as client:
             payload = await _cached_search(
                 client,
-                topics=source.topics or None,
-                language=source.language,
+                topics=topics_for_search,
+                language=search_language,
                 min_stars=100,
-                sort="stars",
+                sort=sort_for_search,
                 per_page=SEARCH_LIMIT,
-                page=1,
+                page=page_for_search,
             )
             search_items = list(payload.get("items", []))
     except Exception as exc:

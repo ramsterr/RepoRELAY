@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 from typing import Any
 
@@ -23,15 +24,18 @@ import typer
 from rich.console import Console
 from rich.logging import RichHandler
 
+from reporelay_mvp import data
 from reporelay_mvp import recommend as recommend_func
 from reporelay_mvp import recommend_random as explore_func
-from reporelay_mvp import data
-from reporelay_mvp.seed_topics import seed_topics as seed_topics_fn, DEFAULT_TOPICS
 from reporelay_mvp.embed_pass import embed_top
 from reporelay_mvp.github import save_repo
 from reporelay_mvp.seed import DEFAULT_LANGUAGES, seed_corpus
+from reporelay_mvp.seed_topics import DEFAULT_TOPICS
+from reporelay_mvp.seed_topics import seed_topics as seed_topics_fn
 from reporelay_mvp.settings import get_mvp_settings
-from reporelay_mvp.trending import DEFAULT_LANGUAGES as TRENDING_LANGUAGES, scrape_all
+from reporelay_mvp.topic_inference import infer_topics_for_repo
+from reporelay_mvp.trending import DEFAULT_LANGUAGES as TRENDING_LANGUAGES
+from reporelay_mvp.trending import scrape_all
 
 app = typer.Typer(help="RepoRelay MVP CLI", no_args_is_help=True)
 console = Console()
@@ -75,6 +79,19 @@ def count() -> None:
 
     n = asyncio.run(run())
     console.print(f"[bold]{n}[/bold] repos in mvp_repos")
+
+
+@app.command("status")
+def status_cmd() -> None:
+    """Show current embedding mode and DB stats."""
+    from reporelay_mvp.embedding import DIMENSION, embedding_mode
+
+    console.print(f"[bold]embedding mode:[/bold] {embedding_mode()}")
+    console.print(f"[bold]embedding dim:[/bold] {DIMENSION}")
+    has_key = bool(get_mvp_settings().openai_api_key) or bool(
+        os.environ.get("OPENAI_API_KEY", "")
+    )
+    console.print(f"[bold]openai key set:[/bold] {'yes' if has_key else 'no'}")
 
 
 @app.command()
@@ -211,25 +228,43 @@ def seed_topics(
 @app.command()
 def embed(
     limit: int = typer.Option(1000, help="how many top-by-stars repos to embed"),
-    concurrency: int = typer.Option(4, help="parallel readme fetches"),
+    concurrency: int = typer.Option(8, help="parallel readme fetches"),
+    batch_size: int = typer.Option(48, help="texts per batched API call (Cohere max=96, chunk=96)"),
+    skip_readme: bool = typer.Option(
+        False,
+        "--skip-readme",
+        help="skip GitHub readme fetches, embed descriptions only "
+        "(useful when GitHub rate limit is exhausted)",
+    ),
 ) -> None:
     """
     Compute and store README embeddings for repos indexed from
     search but not yet embedded. Unlocks pgvector ANN.
 
-    Each repo = 1 readme fetch + 1 embed call. Paced to stay
-    under the 5,000 req/hr REST limit. The model downloads on
-    first run (~11s) and stays in memory.
+    For Gemini (gemini-embedding-001), batched API calls are used:
+    batch_size texts are sent per request. For 11k repos at
+    batch_size=100, this is ~110 batched calls (~3 min at 60 RPM
+    free tier) instead of 22k individual calls (~6 hours).
+
+    Other providers fall back to one-at-a-time embedding.
+
+    Use --skip-readme to skip GitHub API calls and embed only
+    stored descriptions. Useful when you've hit the GitHub rate
+    limit (5000 req/hr) but still want to update the most important
+    signal (description_cosine_sim has 0.27 weight).
     """
     _configure_logging()
     console.print(
-        f"[bold]embedding top {limit} repos (concurrency={concurrency})[/bold]"
+        f"[bold]embedding top {limit} repos (concurrency={concurrency}, "
+        f"batch_size={batch_size}, skip_readme={skip_readme})[/bold]"
     )
     console.print(
         "[dim]first run downloads the embedding model (~80MB, ~11s); subsequent runs are fast[/dim]"
     )
 
-    result = asyncio.run(embed_top(limit=limit, concurrency=concurrency))
+    result = asyncio.run(
+        embed_top(limit=limit, concurrency=concurrency, batch_size=batch_size, skip_readme=skip_readme)
+    )
     if result["attempted"] == 0:
         console.print("[yellow]no repos need embedding[/yellow]")
         return
@@ -385,6 +420,85 @@ def trending(
     updated = asyncio.run(apply())
     console.print(
         f"[bold green]done — {updated}/{len(repos)} trending repos updated in mvp_repos[/bold green]"
+    )
+
+
+@app.command("infer-topics")
+def infer_topics_cmd(
+    limit: int = typer.Option(1000, help="max repos to process"),
+    min_topics: int = typer.Option(3, help="repos with fewer than this many topics get inference"),
+    refetch: bool = typer.Option(
+        False,
+        "--refetch",
+        help="re-fetch README from GitHub for better inference (uses API rate limit)",
+    ),
+) -> None:
+    """
+    Backfill inferred topics on repos with sparse topic lists.
+
+    Uses README + description text to match against a keyword vocabulary
+    and add relevant GitHub-style topic tags. Without --refetch, only
+    the stored description is used (fast, no API calls). With --refetch,
+    the README is re-fetched from GitHub for more accurate inference.
+    """
+    _configure_logging()
+
+    async def run() -> tuple[int, int]:
+        session = await data.get_session()
+        try:
+            repos = await data.list_repos_needing_topic_inference(
+                session, limit=limit, min_topic_count=min_topics,
+            )
+        finally:
+            await session.close()
+
+        if not repos:
+            console.print("[yellow]no repos need topic inference[/yellow]")
+            return 0, 0
+
+        console.print(f"[bold]inferring topics for {len(repos)} repos (min_topics < {min_topics})[/bold]")
+
+        updated = 0
+        from reporelay_mvp.github import _auth_client
+        from reporelay_mvp.github import fetch_readme as gh_fetch_readme
+
+        settings = get_mvp_settings()
+
+        for i, repo in enumerate(repos):
+            readme_text: str | None = None
+
+            if refetch and settings.github_token:
+                try:
+                    async with _auth_client(settings.github_token) as client:
+                        readme_text = await gh_fetch_readme(client, repo.owner, repo.name)
+                except Exception:
+                    pass  # fall back to description-only
+
+            inferred = infer_topics_for_repo(
+                repo.description, readme_text, repo.topics,
+            )
+
+            if not inferred:
+                continue
+
+            session = await data.get_session()
+            try:
+                await data.update_topics(session, repo_id=repo.id, topics=inferred)
+                await session.commit()
+            finally:
+                await session.close()
+
+            updated += 1
+            new_topics_str = ", ".join(inferred)
+            console.print(
+                f"  [{i+1}/{len(repos)}] {repo.full_name}: +[green]{new_topics_str}[/green]"
+            )
+
+        return updated, len(repos)
+
+    updated, total = asyncio.run(run())
+    console.print(
+        f"[bold green]done — {updated}/{total} repos got new topics[/bold green]"
     )
 
 

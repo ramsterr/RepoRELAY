@@ -4,6 +4,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
     REPORE_LAY_LIGHTWEIGHT=1 \
+    EMBEDDING_API=openai \
     OMP_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \
     PYTHONMALLOC=malloc \
@@ -18,12 +19,14 @@ COPY pyproject.toml uv.lock ./
 COPY packages/mvp ./packages/mvp
 COPY apps/mvp_api ./apps/mvp_api
 
-RUN uv sync --frozen --no-dev
+# Build the [embed] extra too so local fallback still works during build/tests
+RUN uv sync --frozen --no-dev --extra embed
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Model downloads at runtime on first embedding request (~5-9s).
-# HF_HOME is set above so it caches to disk and survives restarts.
+# OPENAI_API_KEY must be provided via Render env vars (sync: false in render.yaml).
+# In lightweight + openai mode, the model is NOT loaded — embedding is done via
+# the OpenAI API (text-embedding-3-small, dimensions=384) at ~$0.02/1M tokens.
 
 EXPOSE 8000
 

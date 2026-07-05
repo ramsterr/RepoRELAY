@@ -22,7 +22,9 @@ import httpx
 from reporelay_mvp import data
 from reporelay_mvp.embedding import embed_text
 from reporelay_mvp.models import Repo
+from reporelay_mvp.purpose import get_effective_description
 from reporelay_mvp.settings import get_mvp_settings
+from reporelay_mvp.topic_inference import infer_topics_for_repo
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +81,92 @@ async def fetch_repo_metadata(client: httpx.AsyncClient, owner: str, name: str) 
 
 
 async def fetch_readme(client: httpx.AsyncClient, owner: str, name: str) -> str:
+    """Fetch a repo's README. Handles GitHub rate limits with backoff.
+
+    GitHub returns rate-limit info in headers:
+      X-RateLimit-Remaining — requests left in current hour
+      X-RateLimit-Reset     — unix timestamp when quota resets
+      Retry-After          — seconds to wait (sent on 429/403 secondary rate limits)
+    """
+    # Conservative per-request pacing: GitHub authenticated limit is
+    # 5000 req/hr = 1.4 req/sec. With 8 concurrent fetches we hit
+    # that easily, so we add a small sleep between requests.
+    # This is checked BEFORE the request via a global counter.
+    await _pace_github_request()
+
     try:
         data_dict = await _get(client, f"/repos/{owner}/{name}/readme")
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
             return ""
+        if exc.response.status_code in (403, 429):
+            # Rate limited. Check headers for wait time.
+            await _handle_github_rate_limit(exc.response)
+            # Retry once
+            try:
+                data_dict = await _get(client, f"/repos/{owner}/{name}/readme")
+            except httpx.HTTPStatusError as exc2:
+                if exc2.response.status_code == 404:
+                    return ""
+                raise
+            return _decode_base64_text(data_dict.get("content", ""))
         raise
     return _decode_base64_text(data_dict.get("content", ""))
+
+
+# ── Global rate limiter for GitHub API ─────────────────────────────────
+import time
+import asyncio
+from collections import deque
+
+_github_request_times: deque[float] = deque()
+_github_lock = asyncio.Lock()
+_GITHUB_RATE_LIMIT = 4900  # use full 5000/hr quota, GitHub's own 403 handles the rest
+_GITHUB_WINDOW_SECONDS = 3600.0  # 1 hour
+
+
+async def _pace_github_request() -> None:
+    """Block until a GitHub request slot is available.
+
+    Tracks request times in a sliding window. Limits to
+    _GITHUB_RATE_LIMIT requests per hour (conservative — actual
+    limit is 5000 for authenticated users).
+    """
+    async with _github_lock:
+        now = time.monotonic()
+        # Drop timestamps older than 1 hour
+        while _github_request_times and (now - _github_request_times[0]) > _GITHUB_WINDOW_SECONDS:
+            _github_request_times.popleft()
+        if len(_github_request_times) >= _GITHUB_RATE_LIMIT:
+            sleep_for = _GITHUB_WINDOW_SECONDS - (now - _github_request_times[0]) + 1.0
+            logger.warning(
+                "GitHub rate limit approaching: %d requests in last hour, "
+                "sleeping %.0fs",
+                len(_github_request_times), sleep_for,
+            )
+            await asyncio.sleep(sleep_for)
+            # Reset after sleep
+            _github_request_times.clear()
+        _github_request_times.append(time.monotonic())
+
+
+async def _handle_github_rate_limit(response: Any) -> None:
+    """Sleep until GitHub rate limit resets, based on response headers."""
+    retry_after = response.headers.get("Retry-After")
+    reset_at = response.headers.get("X-RateLimit-Reset")
+    if retry_after:
+        wait = float(retry_after)
+        logger.warning("GitHub Retry-After: sleeping %.0fs", wait)
+        await asyncio.sleep(wait)
+    elif reset_at:
+        now = time.time()
+        wait = max(0, float(reset_at) - now)
+        logger.warning("GitHub rate limit resets in %.0fs", wait)
+        await asyncio.sleep(wait)
+    else:
+        # Fallback: wait 60s
+        logger.warning("GitHub rate limited, sleeping 60s")
+        await asyncio.sleep(60)
 
 
 async def fetch_topics(client: httpx.AsyncClient, owner: str, name: str) -> list[str]:
@@ -289,7 +370,7 @@ async def quick_save(owner: str, name: str) -> int:
             stars=stars,
             dependencies=[],
         )
-        await data.set_embedding(session, repo_id=repo_id, embedding=[0.0] * 384)
+        await data.set_embedding(session, repo_id=repo_id, embedding=[0.0] * 512)
         await session.commit()
     finally:
         await session.close()
@@ -323,6 +404,44 @@ async def enrich_repo(owner: str, name: str) -> None:
             if readme.strip():
                 embedding = await embed_text(readme[:8000])
                 await data.set_embedding(session, repo_id=existing.id, embedding=embedding)
+
+            # Fill in a good description from README if the existing one
+            # is missing, too short, or generic filler. This ensures the
+            # description_cosine_sim feature has real signal.
+            effective_desc = get_effective_description(
+                existing.description, readme if readme.strip() else None,
+            )
+            desc_changed = effective_desc and effective_desc != existing.description
+            if desc_changed:
+                await data.upsert_repo(
+                    session,
+                    repo_id=existing.id,
+                    owner=owner,
+                    name=name,
+                    full_name=full_name,
+                    description=effective_desc,
+                    language=existing.language,
+                    topics=existing.topics,
+                    stars=existing.stars,
+                    dependencies=existing.dependencies,
+                )
+                # Re-embed the description so the new text gets a vector
+                desc_emb = await embed_text(effective_desc)
+                await data.set_description_embedding(
+                    session, repo_id=existing.id, description_embedding=desc_emb,
+                )
+
+            # Infer topics from README + description if repo has few
+            inferred_topics: list[str] = []
+            if len(existing.topics) < 3:
+                inferred_topics = infer_topics_for_repo(
+                    effective_desc or existing.description, readme, existing.topics,
+                )
+                if inferred_topics:
+                    await data.update_topics(
+                        session, repo_id=existing.id, topics=inferred_topics,
+                    )
+
             if deps:
                 await data.upsert_repo(
                     session,
@@ -330,7 +449,7 @@ async def enrich_repo(owner: str, name: str) -> None:
                     owner=owner,
                     name=name,
                     full_name=full_name,
-                    description=existing.description,
+                    description=effective_desc or existing.description,
                     language=existing.language,
                     topics=existing.topics,
                     stars=existing.stars,
@@ -340,7 +459,10 @@ async def enrich_repo(owner: str, name: str) -> None:
         finally:
             await session.close()
 
-        logger.info("enriched %s/%s (deps=%d, embedded=%s)", owner, name, len(deps), bool(readme.strip()))
+        logger.info(
+            "enriched %s/%s (deps=%d, embedded=%s, inferred_topics=%d, desc_changed=%s)",
+            owner, name, len(deps), bool(readme.strip()), len(inferred_topics), desc_changed,
+        )
     except Exception as exc:
         logger.warning("background enrich failed for %s/%s: %s", owner, name, exc)
 
@@ -363,6 +485,17 @@ async def save_repo(owner: str, name: str) -> int:
 
         language = metadata.get("language")
         stars = int(metadata.get("stargazers_count") or 0)
+        raw_description = metadata.get("description")
+
+        # Use the best available description — the repo's own if it's
+        # substantive, otherwise extract purpose from the README.
+        description = get_effective_description(raw_description, readme)
+
+        # Infer topics from README + description if GitHub gave us few
+        if len(topics) < 3:
+            inferred = infer_topics_for_repo(description, readme, topics)
+            if inferred:
+                topics = list(dict.fromkeys(topics + inferred))  # dedupe, preserve order
 
         session = await data.get_session()
         try:
@@ -372,7 +505,7 @@ async def save_repo(owner: str, name: str) -> int:
                 owner=owner,
                 name=name,
                 full_name=f"{owner}/{name}",
-                description=metadata.get("description"),
+                description=description,
                 language=language,
                 topics=topics,
                 stars=stars,
@@ -381,9 +514,14 @@ async def save_repo(owner: str, name: str) -> int:
             if readme.strip():
                 embedding = await embed_text(readme[:8000])
                 await data.set_embedding(session, repo_id=repo_id, embedding=embedding)
+            if description:
+                desc_emb = await embed_text(description)
+                await data.set_description_embedding(
+                    session, repo_id=repo_id, description_embedding=desc_emb,
+                )
             await session.commit()
         finally:
             await session.close()
 
-    logger.info("saved %s/%s (id=%d)", owner, name, repo_id)
+    logger.info("saved %s/%s (id=%d, topics=%d)", owner, name, repo_id, len(topics))
     return repo_id

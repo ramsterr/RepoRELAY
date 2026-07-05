@@ -10,5 +10,9 @@ services:
         sync: false
       - key: GITHUB_TOKEN
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: EMBEDDING_API
+        value: "openai"
       - key: PORT
         value: "8000"

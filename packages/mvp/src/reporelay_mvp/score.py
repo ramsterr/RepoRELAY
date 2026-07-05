@@ -26,38 +26,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from reporelay_mvp import data
 from reporelay_mvp.embedding import cosine_batch_one_vs_many
-from reporelay_mvp.features import compute_features, tag_match as _tag_match
+from reporelay_mvp.features import compute_features
+from reporelay_mvp.features import tag_match as _tag_match
 from reporelay_mvp.models import Features, Repo
 
 logger = logging.getLogger(__name__)
 
 WEIGHTS: dict[str, float] = {
-    "language_match":          0.08,
-    "topic_overlap":           0.18,
-    "cosine_sim":              0.15,
-    "description_sim":         0.05,
-    "description_cosine_sim":  0.15,
-    "readme_topic_sim":        0.00,
-    "dep_overlap":             0.12,
-    "popularity_sim":          0.10,
-    "trending_boost":          0.07,
-    "quality_signal":          0.05,
+    "language_match":          0.04,
+    "topic_overlap":           0.20,
+    "cosine_sim":              0.10,
+    "description_sim":         0.04,
+    "description_cosine_sim":  0.27,
+    "readme_topic_sim":        0.08,
+    "dep_overlap":             0.08,
+    "popularity_sim":          0.05,
+    "trending_boost":          0.05,
+    "quality_signal":          0.04,
     "language_diversity":      0.05,
 }
 
 TAG_WEIGHTS: dict[str, float] = {
-    "language_match":          0.05,
-    "topic_overlap":           0.15,
-    "cosine_sim":              0.10,
-    "description_sim":         0.05,
-    "description_cosine_sim":  0.10,
-    "readme_topic_sim":        0.00,
+    "language_match":          0.03,
+    "topic_overlap":           0.12,
+    "cosine_sim":              0.08,
+    "description_sim":         0.03,
+    "description_cosine_sim":  0.20,
+    "readme_topic_sim":        0.05,
     "filter_cosine_sim":       0.25,
-    "dep_overlap":             0.08,
-    "popularity_sim":          0.07,
+    "dep_overlap":             0.06,
+    "popularity_sim":          0.05,
     "trending_boost":          0.05,
-    "quality_signal":          0.05,
-    "language_diversity":      0.05,
+    "quality_signal":          0.04,
+    "language_diversity":      0.04,
 }
 
 
@@ -72,13 +73,19 @@ def _embedding_weights(
         moved = w.pop("cosine_sim", 0.0)
         if moved > 0:
             half = moved / 2
-            w["topic_overlap"] = w.get("topic_overlap", 0.18) + half
-            w["description_sim"] = w.get("description_sim", 0.05) + half
+            w["topic_overlap"] = w.get("topic_overlap", 0.20) + half
+            w["description_sim"] = w.get("description_sim", 0.04) + half
 
     if not has_desc_emb:
         moved = w.pop("description_cosine_sim", 0.0)
         if moved > 0:
-            w["description_sim"] = w.get("description_sim", 0.0) + moved
+            # Redistribute the description_cosine_sim weight intelligently:
+            # - half goes to description_sim (the weaker bag-of-words fallback)
+            # - half goes to readme_topic_sim (which uses README keywords that
+            #   are still available even when the description is missing)
+            half = moved / 2
+            w["description_sim"] = w.get("description_sim", 0.0) + half
+            w["readme_topic_sim"] = w.get("readme_topic_sim", 0.0) + half
 
     return w
 
@@ -87,8 +94,14 @@ def _readme_weights(weights: dict[str, float], has_readme: bool) -> dict[str, fl
     if not has_readme:
         return weights
     w = dict(weights)
-    w["readme_topic_sim"] = 0.15
-    w["topic_overlap"] = w.get("topic_overlap", 0.18) - 0.15
+    # When the source README is available, boost readme_topic_sim by
+    # borrowing from topic_overlap. README tokens are a strong cross-
+    # language signal — they match keywords like "chess" against
+    # candidate topic tags even when source and candidate have no
+    # shared topic.
+    boost = 0.07
+    w["readme_topic_sim"] = w.get("readme_topic_sim", 0.0) + boost
+    w["topic_overlap"] = w.get("topic_overlap", 0.20) - boost
     return w
 
 
@@ -127,7 +140,11 @@ def _get_weights(
     for name, v in base.items():
         jitter = 1.0 + rng.uniform(-0.10, 0.10)
         w[name] = v * jitter
-    w["popularity_sim"] *= 3.0
+    # The old behavior tripled popularity_sim when a seed was set,
+    # which actively hurt domain relevance. Now we just apply a mild
+    # boost (1.3x) so explore mode surfaces a wider range of repos
+    # without drowning out semantic signals.
+    w["popularity_sim"] = w.get("popularity_sim", 0.0) * 1.3
     return w
 
 
@@ -240,6 +257,10 @@ async def score_many(
                         has_readme_keywords=has_readme,
                         has_topics=has_topics)
         if rng is not None:
-            s += rng.uniform(-0.08, 0.08)
+            # Tight noise band — ±0.04 gives meaningful variation for
+            # "explore" mode without reordering the top 10. The old
+            # ±0.08 was too aggressive and could swap position-1 with
+            # position-10 candidates.
+            s += rng.uniform(-0.04, 0.04)
         scored.append((cand, s, features))
     return scored

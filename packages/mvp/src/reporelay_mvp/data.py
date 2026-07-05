@@ -389,6 +389,60 @@ async def count_repos(session: AsyncSession) -> int:
     return int(rows.scalar() or 0)
 
 
+async def update_topics(
+    session: AsyncSession,
+    *,
+    repo_id: int,
+    topics: list[str],
+) -> None:
+    """Merge new topics into an existing repo's topic list.
+
+    Does a UNION of existing + new topics so nothing is lost.
+    """
+    await session.execute(
+        text(
+            """
+            UPDATE mvp_repos
+            SET topics = (
+                SELECT ARRAY(
+                    SELECT DISTINCT unnest(topics || :new_topics)
+                )
+            ),
+            updated_at = NOW()
+            WHERE id = :id
+            """
+        ),
+        {"id": repo_id, "new_topics": topics},
+    )
+
+
+async def list_repos_needing_topic_inference(
+    session: AsyncSession,
+    *,
+    limit: int = 1000,
+    min_topic_count: int = 3,
+) -> list[Repo]:
+    """Return repos with fewer than min_topic_count topics.
+
+    These are candidates for topic inference from their README text.
+    Ordered by stars descending (highest-impact repos first).
+    """
+    rows = await session.execute(
+        text(
+            f"""
+            SELECT {EXPECTED_COLUMNS}
+            FROM mvp_repos
+            WHERE array_length(topics, 1) IS NULL
+               OR array_length(topics, 1) < :min_topic_count
+            ORDER BY stars DESC
+            LIMIT :limit
+            """
+        ),
+        {"min_topic_count": min_topic_count, "limit": limit},
+    )
+    return [_row_to_repo(r) for r in rows]
+
+
 async def get_random_repo(session: AsyncSession, *, seed: int) -> Repo | None:
     """Pick a random repo using a seed for deterministic random selection."""
     total = await count_repos(session)

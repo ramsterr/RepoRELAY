@@ -6,7 +6,10 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 
 <Base>
   <h1 id="page-title">loading...</h1>
-  <p class="subtitle" id="subtitle"></p>
+  <p class="subtitle">
+    <a href="/" style="color: var(--accent-dim);">&larr; back</a>
+    <span id="cache-badge" class="cache-badge"></span>
+  </p>
 
   <div class="filter-bar">
     <input type="text" id="add-tag" placeholder="add filter tag (e.g. react, machine-learning)" class="tag-input" />
@@ -16,11 +19,10 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 
   <div class="seed-row">
     <div class="seed-group">
-      <button type="button" class="btn btn-icon" id="seed-prev" title="previous seed">&minus;</button>
+      <button type="button" class="btn btn-icon" id="seed-prev">&minus;</button>
       <input type="number" id="seed-input" class="seed-input" min="0" max="999999" placeholder="seed" />
-      <button type="button" class="btn btn-icon" id="seed-next" title="next seed">+</button>
+      <button type="button" class="btn btn-icon" id="seed-next">+</button>
       <button type="button" class="btn btn-outline" id="reroll-btn">random seed</button>
-      <span class="cache-badge" id="cache-badge"></span>
     </div>
     <div class="more-row" id="more-row" style="display:none">
       <span class="selected-count" id="selected-count">0 selected</span>
@@ -28,7 +30,7 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     </div>
   </div>
 
-  <p class="section-label" id="results-header" style="margin-top:0.3rem;">
+  <p class="section-label" id="results-header">
     <span id="results-label">loading...</span>
   </p>
 
@@ -38,49 +40,89 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 </Base>
 
 <script define:vars={{ API: API_URL }}>
-
   // ── repo extraction ──────────────────────────────────────────────
   function getRepoFromPath() {
-    const params = new URLSearchParams(window.location.search);
-    const qp = params.get("repo");
+    var params = new URLSearchParams(window.location.search);
+    var qp = params.get("repo");
     if (qp) return qp;
-    const path = window.location.pathname;
-    const match = path.match(/^\/repo\/(.+)/);
+    var path = window.location.pathname;
+    var match = path.match(/^\/repo\/(.+)/);
     if (match) return match[1].replace(/\/+$/, "");
     return "";
   }
 
-  const repo = getRepoFromPath();
+  var repo = getRepoFromPath();
   if (repo) document.getElementById("page-title").textContent = repo;
 
+  // ── fetch helpers (proven, rock-solid) ───────────────────────────
+  var _fc = {};
+  function cachedFetch(url, opts) {
+    opts = opts || {};
+    var timeoutMs = opts.timeout || 15000;
+    var onSlow = opts.onSlow;
+    var now = Date.now();
+    if (_fc[url] && now - _fc[url].ts < 300000) return Promise.resolve(_fc[url].data);
+    try {
+      var sc = sessionStorage.getItem("rr:" + url);
+      if (sc) { var p = JSON.parse(sc); if (now - p.ts < 300000) { _fc[url] = p; return Promise.resolve(p.data); } }
+    } catch (e) {}
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timeoutId = setTimeout(function () { if (controller) controller.abort(); }, timeoutMs);
+    var slowId = onSlow ? setTimeout(onSlow, 3000) : null;
+    var fetchOpts = controller ? { signal: controller.signal } : {};
+    return fetch(url, fetchOpts).then(function (res) {
+      clearTimeout(timeoutId); if (slowId) clearTimeout(slowId);
+      if (!res.ok) return res.text().then(function () { throw new Error("API " + res.status); });
+      return res.text().then(function (text) {
+        var data; try { data = JSON.parse(text); } catch (e) { throw new Error("non-JSON response"); }
+        var entry = { data: data, ts: now }; _fc[url] = entry;
+        try { sessionStorage.setItem("rr:" + url, JSON.stringify(entry)); } catch (e) {}
+        return data;
+      });
+    }).catch(function (err) {
+      clearTimeout(timeoutId); if (slowId) clearTimeout(slowId);
+      if (controller && err && err.name === "AbortError") throw new Error("request timed out");
+      if (err && err.message && /Failed to fetch|NetworkError|Load failed/i.test(err.message)) throw new Error("API unreachable");
+      throw err;
+    });
+  }
+  function cachedFetchWithRetry(url, opts, retries) {
+    retries = retries || 1;
+    return cachedFetch(url, opts).catch(function (err) {
+      if (retries > 0) {
+        return new Promise(function (resolve) {
+          setTimeout(function () { resolve(cachedFetchWithRetry(url, opts, retries - 1)); }, 2000);
+        });
+      }
+      throw err;
+    });
+  }
+
   // ── seed state ───────────────────────────────────────────────────
-  let currentSeed = (() => {
-    const s = new URLSearchParams(window.location.search).get("seed");
+  var currentSeed = (function () {
+    var s = new URLSearchParams(window.location.search).get("seed");
     return s ? parseInt(s) : undefined;
   })();
-
-  const seedInput = document.getElementById("seed-input");
-  if (currentSeed !== undefined) seedInput.value = String(currentSeed);
+  if (currentSeed !== undefined) document.getElementById("seed-input").value = String(currentSeed);
 
   function setSeed(v) {
     currentSeed = v !== undefined ? Math.max(0, Math.min(999999, v)) : undefined;
-    seedInput.value = currentSeed !== undefined ? String(currentSeed) : "";
+    document.getElementById("seed-input").value = currentSeed !== undefined ? String(currentSeed) : "";
     loadRecommendations();
   }
 
   // ── tags state ───────────────────────────────────────────────────
-  let currentTags = (() => {
-    const raw = new URLSearchParams(window.location.search).get("tags");
-    return raw ? raw.split(",").map((t) => t.trim()).filter(Boolean) : [];
+  var currentTags = (function () {
+    var raw = new URLSearchParams(window.location.search).get("tags");
+    return raw ? raw.split(",").map(function (t) { return t.trim(); }).filter(Boolean) : [];
   })();
-
   if (currentTags.length > 0) {
     document.getElementById("results-label").textContent = "active filters:";
     updateTagChips();
   }
 
-  // ── picked repos (for "show more like these") ────────────────────
-  let pickedRepos = [];
+  // ── picked repos ─────────────────────────────────────────────────
+  var pickedRepos = [];
 
   function updatePickedUI() {
     document.getElementById("selected-count").textContent = pickedRepos.length + " selected";
@@ -98,7 +140,7 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     return "low";
   }
   function matchLabel(features) {
-    const parts = [];
+    var parts = [];
     if (features.language_match >= 1) parts.push("same language");
     if (features.topic_overlap > 0.3) parts.push("shared topics");
     if (features.cosine_sim > 0.6) parts.push("similar README");
@@ -107,123 +149,69 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     if (parts.length === 0) return "loose match";
     return parts.slice(0, 2).join(" + ");
   }
-
   function esc(s) { return (s || "").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
-  // ── render results ───────────────────────────────────────────────
+  // ── render ───────────────────────────────────────────────────────
   function renderResults(repos) {
-    let html = "";
-    for (const r of repos) {
-      const idx = pickedRepos.indexOf(r.full_name);
-      const checked = idx !== -1;
-      const otherTopics = (r.topics || []).filter((t) => (r.shared_topics || []).indexOf(t) === -1).slice(0, 3);
+    var html = "";
+    for (var i = 0; i < repos.length; i++) {
+      var r = repos[i];
+      var idx = pickedRepos.indexOf(r.full_name);
+      var checked = idx !== -1;
+      var otherTopics = (r.topics || []).filter(function (t) { return (r.shared_topics || []).indexOf(t) === -1; }).slice(0, 3);
       html +=
-        `<div class="card${checked ? " card-picked" : ""}" data-repo="${r.full_name}">` +
-        `<label class="card-check"><input type="checkbox"${checked ? " checked" : ""} data-repo="${r.full_name}" /></label>` +
+        '<div class="card' + (checked ? " card-picked" : "") + '" data-repo="' + r.full_name + '">' +
+        '<label class="card-check"><input type="checkbox"' + (checked ? " checked" : "") + ' data-repo="' + r.full_name + '" /></label>' +
         '<div class="card-top">' +
-        `<a class="card-repo" href="https://github.com/${r.full_name}" target="_blank" rel="noopener">${r.full_name}</a>` +
-        `<span class="stars">${fmt(r.stars)} \u2605</span>` +
+        '<a class="card-repo" href="https://github.com/' + r.full_name + '" target="_blank" rel="noopener">' + r.full_name + '</a>' +
+        '<span class="stars">' + fmt(r.stars) + ' \u2605</span>' +
         '</div>' +
-        `<div class="card-desc">${esc(r.description) || "(no description)"}</div>` +
+        '<div class="card-desc">' + esc(r.description || "") || "(no description)" + '</div>' +
         '<div class="card-meta">' +
-        `<span class="score-dot ${scoreColor(r.score)}"></span>` +
-        `<span class="badge badge-lang" style="font-size:0.65rem;">${matchLabel(r.features)}</span>`;
-      if (r.shared_language) {
-        html += `<span class="badge badge-shared-lang">${r.language}</span>`;
-      }
-      if (r.shared_topics && r.shared_topics.length > 0) {
-        html += `<span class="badge badge-shared-topics">${r.shared_topics.join(", ")}</span>`;
-      }
-      if (r.language && !r.shared_language) {
-        html += `<span class="badge badge-lang">${r.language}</span>`;
-      }
-      for (const topic of otherTopics) {
-        html += `<span class="pill">${topic}</span>`;
+        '<span class="score-dot ' + scoreColor(r.score) + '"></span>' +
+        '<span class="badge badge-lang" style="font-size:0.65rem;">' + matchLabel(r.features) + '</span>';
+      if (r.shared_language) html += '<span class="badge badge-shared-lang">' + r.language + '</span>';
+      if (r.shared_topics && r.shared_topics.length > 0) html += '<span class="badge badge-shared-topics">' + r.shared_topics.join(", ") + '</span>';
+      if (r.language && !r.shared_language) html += '<span class="badge badge-lang">' + r.language + '</span>';
+      for (var j = 0; j < otherTopics.length; j++) {
+        html += '<span class="pill">' + otherTopics[j] + '</span>';
       }
       html += '</div></div>';
     }
     return html;
   }
 
-  // ── fetch helpers ─────────────────────────────────────────────────
-  var _fc = {};
-  function cachedFetchWithRetry(url, opts) {
-    opts = opts || {};
-    var timeoutMs = opts.timeout || 15000;
-    var onSlow = opts.onSlow;
-    var retries = opts.retries !== undefined ? opts.retries : 1;
-    var now = Date.now();
-    if (_fc[url] && now - _fc[url].ts < 300000) return Promise.resolve(_fc[url].data);
-    try { var sc = sessionStorage.getItem("rr:" + url); if (sc) { var p = JSON.parse(sc); if (now - p.ts < 300000) { _fc[url] = p; return Promise.resolve(p.data); } } } catch (e) {}
-    var slowId = onSlow ? setTimeout(onSlow, 3000) : null;
-    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    var timeoutId = setTimeout(function () { if (controller) controller.abort(); }, timeoutMs);
-    var fetchOpts = controller ? { signal: controller.signal } : {};
-    return fetch(url, fetchOpts).then(function (res) {
-      clearTimeout(timeoutId); if (slowId) clearTimeout(slowId);
-      if (!res.ok) return res.text().then(function (t) { throw new Error("API " + res.status); });
-      return res.text().then(function (text) {
-        var data; try { data = JSON.parse(text); } catch (e) { throw new Error("non-JSON response"); }
-        var entry = { data: data, ts: now }; _fc[url] = entry;
-        try { sessionStorage.setItem("rr:" + url, JSON.stringify(entry)); } catch (e) {}
-        return data;
-      });
-    }).catch(function (err) {
-      clearTimeout(timeoutId); if (slowId) clearTimeout(slowId);
-      if (controller && err && err.name === "AbortError") throw new Error("request timed out");
-      if (err && err.message && /Failed to fetch|NetworkError|Load failed/i.test(err.message)) throw new Error("API unreachable");
-      if (retries > 0) return new Promise(function (r) { setTimeout(function () { r(cachedFetchWithRetry(url, Object.assign({}, opts, { retries: retries - 1 }))); }, 2000); });
-      throw err;
-    });
-  }
-
-  function fetchMoreLikeThese(picked, limit, seed, tags) {
-    var body = { picked: picked, limit: limit };
-    if (seed !== undefined) body.seed = seed;
-    if (tags && tags.length > 0) body.tags = tags.join(",");
-    return fetch(API + "/recommend/more", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then(function (res) {
-      if (!res.ok) return res.text().then(function () { throw new Error("API " + res.status); });
-      return res.json();
-    });
-  }
-
-  // ── load recommendations ─────────────────────────────────────────
-  async function loadRecommendations() {
+  // ── load ─────────────────────────────────────────────────────────
+  function loadRecommendations() {
     var resultsEl = document.getElementById("results");
     var headerEl = document.getElementById("results-label");
-    var subtitleEl = document.getElementById("subtitle");
     var cacheEl = document.getElementById("cache-badge");
 
     if (!repo) {
       headerEl.textContent = "";
-      resultsEl.innerHTML = '<div class="error">no repo specified &#8212; go <a href="/">home</a> to search</div>';
+      resultsEl.innerHTML = '<div class="error">no repo specified</div>';
       return;
     }
-
-    headerEl.textContent = "loading...";
-    cacheEl.style.display = "none";
-    resultsEl.innerHTML = '<div class="loading" id="results-loading">searching for similar repos...</div>';
 
     var params = "repo=" + encodeURIComponent(repo) + "&limit=12";
     if (currentSeed !== undefined) params += "&seed=" + currentSeed;
     if (currentTags.length > 0) params += "&tags=" + encodeURIComponent(currentTags.join(","));
+
+    headerEl.textContent = "loading...";
+    cacheEl.style.display = "none";
+    resultsEl.innerHTML = '<div class="loading" id="results-loading">searching for similar repos...</div>';
 
     cachedFetchWithRetry(API + "/recommend?" + params, {
       onSlow: function () {
         var el = document.getElementById("results-loading");
         if (el) el.textContent = "still searching... (cold start can take a few seconds)";
       },
-    })
+    }, 1)
       .then(function (data) {
         var repos = data.repos || [];
-        var seedText = currentSeed !== undefined ? "(seed: " + currentSeed + ")" : "";
+        var seedText = currentSeed !== undefined ? " (seed: " + currentSeed + ")" : "";
         var cacheText = data.from_cache ? "cached" : "live";
-        headerEl.textContent = repos.length + " recommendations " + seedText;
-        subtitleEl.textContent = "source: " + data.source_repo;
+        headerEl.textContent = repos.length + " recommendations" + seedText;
         cacheEl.textContent = cacheText;
         cacheEl.className = "cache-badge cache-" + (data.from_cache ? "hit" : "miss");
         cacheEl.style.display = "inline-block";
@@ -236,26 +224,39 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
           '<div class="error">' + msg +
           '<br><button type="button" class="btn btn-outline" style="margin-top:0.75rem;font-size:0.75rem;padding:0.4rem 0.8rem;" id="retry-btn">retry</button>' +
           '</div>';
-        document.getElementById("retry-btn").addEventListener("click", function () { loadRecommendations(); });
+        var retryBtn = document.getElementById("retry-btn");
+        if (retryBtn) retryBtn.addEventListener("click", function () { loadRecommendations(); });
       });
   }
 
-  // ── "show more like these" ───────────────────────────────────────
-  async function showMoreLikeThese() {
+  // ── show more like these ─────────────────────────────────────────
+  function showMoreLikeThese() {
     var resultsEl = document.getElementById("results");
     var headerEl = document.getElementById("results-label");
     var cacheEl = document.getElementById("cache-badge");
 
-    resultsEl.innerHTML = '<div class="loading" id="results-loading">finding repos similar to your picks...</div>';
+    resultsEl.innerHTML = '<div class="loading">finding repos similar to your picks...</div>';
     cacheEl.style.display = "none";
 
-    fetchMoreLikeThese(pickedRepos, 12, currentSeed, currentTags)
+    var body = { picked: pickedRepos, limit: 12 };
+    if (currentSeed !== undefined) body.seed = currentSeed;
+    if (currentTags.length > 0) body.tags = currentTags.join(",");
+
+    fetch(API + "/recommend/more", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(function (res) {
+        if (!res.ok) return res.text().then(function () { throw new Error("API " + res.status); });
+        return res.json();
+      })
       .then(function (data) {
         var repos = data.repos || [];
-        var seedText = currentSeed !== undefined ? "(seed: " + currentSeed + ")" : "";
-        headerEl.textContent = repos.length + " recommendations " + seedText;
-        document.getElementById("subtitle").textContent = "picked: " + data.source_repo;
+        var seedText = currentSeed !== undefined ? " (seed: " + currentSeed + ")" : "";
+        headerEl.textContent = repos.length + " recommendations" + seedText;
         document.getElementById("page-title").textContent = "more like these";
+        document.getElementById("subtitle").innerHTML = "picked: " + data.source_repo + ' <a href="/" style="color:var(--accent-dim);">&larr; back</a>';
         resultsEl.innerHTML = renderResults(repos);
         bindCheckboxes();
         pickedRepos = [];
@@ -265,32 +266,33 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         var msg = (e && e.message) || "failed to load";
         resultsEl.innerHTML =
           '<div class="error">' + msg +
-          '<br><button type="button" class="btn btn-outline" style="margin-top:0.75rem;font-size:0.75rem;padding:0.4rem 0.8rem;" id="retry-btn">retry</button>' +
+          '<br><button type="button" class="btn btn-outline" style="margin-top:0.75rem;padding:0.4rem 0.8rem;" id="retry-btn">retry</button>' +
           '</div>';
-        document.getElementById("retry-btn").addEventListener("click", function () { showMoreLikeThese(); });
+        var retryBtn = document.getElementById("retry-btn");
+        if (retryBtn) retryBtn.addEventListener("click", function () { showMoreLikeThese(); });
       });
   }
-  }
 
-  // ── checkbox handling ────────────────────────────────────────────
+  // ── checkboxes ───────────────────────────────────────────────────
   function bindCheckboxes() {
-    document.querySelectorAll(".card-check input[type=checkbox]").forEach((cb) => {
-      cb.addEventListener("change", function () {
-        const repoName = this.getAttribute("data-repo");
-        const card = document.querySelector(`.card[data-repo="${repoName}"]`);
+    var cbs = document.querySelectorAll(".card-check input[type=checkbox]");
+    for (var i = 0; i < cbs.length; i++) {
+      cbs[i].addEventListener("change", function () {
+        var repoName = this.getAttribute("data-repo");
+        var card = document.querySelector('.card[data-repo="' + repoName + '"]');
         if (this.checked) {
           if (pickedRepos.indexOf(repoName) === -1) pickedRepos.push(repoName);
           if (card) card.classList.add("card-picked");
         } else {
-          pickedRepos = pickedRepos.filter((r) => r !== repoName);
+          pickedRepos = pickedRepos.filter(function (r) { return r !== repoName; });
           if (card) card.classList.remove("card-picked");
         }
         updatePickedUI();
       });
-    });
+    }
   }
 
-  // ── tag management ───────────────────────────────────────────────
+  // ── tags ─────────────────────────────────────────────────────────
   function addTag(tag) {
     tag = tag.trim().toLowerCase();
     if (!tag) return;
@@ -311,11 +313,7 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   }
   function updateTagChips() {
     var el = document.getElementById("active-filters");
-    if (currentTags.length === 0) {
-      el.innerHTML = "";
-      document.getElementById("results-label").textContent = "";
-      return;
-    }
+    if (currentTags.length === 0) { el.innerHTML = ""; document.getElementById("results-label").textContent = ""; return; }
     document.getElementById("results-label").textContent = "active filters:";
     var html = "";
     for (var i = 0; i < currentTags.length; i++) {
@@ -325,26 +323,23 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         '</span>';
     }
     el.innerHTML = html;
-    document.querySelectorAll(".remove-filter").forEach(function (btn) {
-      btn.onclick = function () { removeTag(btn.getAttribute("data-tag")); };
-    });
+    var btns = document.querySelectorAll(".remove-filter");
+    for (var j = 0; j < btns.length; j++) {
+      btns[j].onclick = function () { removeTag(this.getAttribute("data-tag")); };
+    }
   }
 
-  // ── event listeners ──────────────────────────────────────────────
-  document.querySelectorAll(".remove-filter").forEach(function (btn) {
-    btn.onclick = function () { removeTag(btn.getAttribute("data-tag")); };
-  });
-
+  // ── events ───────────────────────────────────────────────────────
+  var removeBtns = document.querySelectorAll(".remove-filter");
+  for (var k = 0; k < removeBtns.length; k++) {
+    removeBtns[k].onclick = function () { removeTag(this.getAttribute("data-tag")); };
+  }
   document.getElementById("apply-tags").addEventListener("click", function () {
-    var input = document.getElementById("add-tag");
-    addTag(input.value);
-    input.value = "";
+    var input = document.getElementById("add-tag"); addTag(input.value); input.value = "";
   });
   document.getElementById("add-tag").addEventListener("keydown", function (e) {
-    if (e.key === "Enter") { e.preventDefault(); addTag(e.target.value); e.target.value = ""; }
+    if (e.key === "Enter") { e.preventDefault(); addTag(this.value); this.value = ""; }
   });
-
-  // seed controls
   document.getElementById("reroll-btn").addEventListener("click", function () {
     setSeed(Math.floor(Math.random() * 99999));
   });
@@ -354,15 +349,12 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   document.getElementById("seed-next").addEventListener("click", function () {
     setSeed((currentSeed || 0) + 1);
   });
-  seedInput.addEventListener("change", function () {
-    var v = parseInt(this.value);
-    setSeed(isNaN(v) ? undefined : v);
+  document.getElementById("seed-input").addEventListener("change", function () {
+    var v = parseInt(this.value); setSeed(isNaN(v) ? undefined : v);
   });
-
-  // show more like these
   document.getElementById("more-btn").addEventListener("click", function () { showMoreLikeThese(); });
 
-  // ── kick off ─────────────────────────────────────────────────────
+  // ── go ───────────────────────────────────────────────────────────
   loadRecommendations();
 </script>
 
@@ -373,29 +365,21 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   .active-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%; }
   .filter-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.35rem 0.75rem; background: rgba(57, 211, 83, 0.15); border: 1px solid rgba(57, 211, 83, 0.35); border-radius: 100px; font-size: 0.85rem; color: var(--accent, #39d353); font-family: var(--font-mono, "Space Mono", monospace); }
   .loading { padding: 1rem 0; opacity: 0.6; }
-
-  /* seed row */
-  .seed-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem; }
-  .seed-group { display: flex; align-items: center; gap: 0.4rem; }
-  .seed-input { width: 5.5rem; padding: 0.5rem 0.6rem; background: var(--bg-glass, rgba(13, 17, 23, 0.55)); border: 1.5px solid var(--border, #30363d); border-radius: 8px; color: inherit; font: inherit; font-size: 0.85rem; text-align: center; }
+  .seed-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.25rem; }
+  .seed-group { display: flex; align-items: center; gap: 0.35rem; }
+  .seed-input { width: 5rem; padding: 0.45rem 0.5rem; background: var(--bg-glass, rgba(13, 17, 23, 0.55)); border: 1.5px solid var(--border, #30363d); border-radius: 8px; color: inherit; font: inherit; font-size: 0.82rem; text-align: center; }
   .seed-input:focus { outline: none; border-color: var(--accent, #39d353); }
-  .seed-input::-webkit-outer-spin-button, .seed-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-
-  /* cache badge */
-  .cache-badge { display: none; font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px; font-family: var(--font-mono, "Space Mono", monospace); margin-left: 0.5rem; }
+  .seed-input::-webkit-outer-spin-button,.seed-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .cache-badge { display: none; font-size: 0.65rem; padding: 0.15rem 0.45rem; border-radius: 4px; font-family: var(--font-mono, "Space Mono", monospace); margin-left: 0.5rem; vertical-align: middle; }
   .cache-hit { background: rgba(57, 211, 83, 0.15); color: var(--accent); }
   .cache-miss { background: rgba(210, 153, 34, 0.15); color: #d29922; }
-
-  /* show more row */
   .more-row { display: flex; align-items: center; gap: 0.75rem; }
   .selected-count { font-size: 0.8rem; opacity: 0.7; font-family: var(--font-mono, "Space Mono", monospace); }
   .btn-accent { background: rgba(57, 211, 83, 0.2); border: 1.5px solid var(--accent); color: var(--accent); font-weight: 600; }
   .btn-accent:hover { background: rgba(57, 211, 83, 0.35); }
-
-  /* card checkboxes */
   .card { position: relative; }
   .card-check { position: absolute; top: 0.6rem; right: 0.75rem; opacity: 0; transition: opacity 0.15s; cursor: pointer; z-index: 2; }
-  .card:hover .card-check, .card-picked .card-check { opacity: 1; }
+  .card:hover .card-check,.card-picked .card-check { opacity: 1; }
   .card-check input[type=checkbox] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); cursor: pointer; }
   .card-picked { border-color: var(--accent) !important; box-shadow: 0 0 0 1px var(--accent), 0 4px 16px rgba(57, 211, 83, 0.15); }
 </style>

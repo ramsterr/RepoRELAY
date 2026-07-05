@@ -244,7 +244,12 @@ async def recommend(
     cached = _rec_cache_get(cache_key, cache_now)
     if cached is not None:
         logger.info("rec cache hit for %s", cache_key)
-        return cached
+        result = ScoredRecommendation(
+            source_repo=cached.source_repo,
+            repos=cached.repos,
+            from_cache=True,
+        )
+        return result
 
     session = await data.get_session()
     try:
@@ -308,6 +313,7 @@ async def recommend(
             scored_repos.append(_build_scored_repo(source, repo, sc, cosine_sim, features=features))
 
         result = ScoredRecommendation(source_repo=full_name, repos=scored_repos)
+        result.from_cache = False
         _rec_cache_set(cache_key, cache_now, result)
         return result
     finally:

@@ -52,6 +52,7 @@ class ScoredRepo(BaseModel):
 class ScoredRecommendation(BaseModel):
     source_repo: str
     repos: list[ScoredRepo]
+    from_cache: bool = False
 
 
 @dataclass

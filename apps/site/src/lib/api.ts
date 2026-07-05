@@ -16,6 +16,7 @@ export interface ScoredRepo {
 export interface RecommendResponse {
   source_repo: string;
   repos: ScoredRepo[];
+  from_cache: boolean;
 }
 
 export async function fetchRecommendations(
@@ -46,6 +47,29 @@ export async function fetchExplore(
     limit: String(limit),
   });
   const res = await fetch(`${API}/explore?${params}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      (err as { detail?: string }).detail || `API error ${res.status}`,
+    );
+  }
+  return res.json();
+}
+
+export async function fetchMoreLikeThese(
+  picked: string[],
+  limit = 10,
+  seed?: number,
+  tags?: string[],
+): Promise<RecommendResponse> {
+  const body: Record<string, unknown> = { picked, limit };
+  if (seed !== undefined) body.seed = seed;
+  if (tags && tags.length > 0) body.tags = tags.join(",");
+  const res = await fetch(`${API}/recommend/more`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(

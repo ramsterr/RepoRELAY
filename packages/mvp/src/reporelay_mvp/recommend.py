@@ -231,10 +231,43 @@ async def recommend(
     limit: int = 10,
     seed: int | None = None,
     tags: list[str] | None = None,
+    _source_override: Repo | None = None,
 ) -> ScoredRecommendation:
+    """Run the full recommendation pipeline.
+
+    If _source_override is provided, it is used as the source repo
+    directly (skipping DB lookup, quick_save, and live embed). This
+    is used by relevance feedback (feedback.py) to run the pipeline
+    against a virtual merged repo.
+    """
     if limit <= 0:
         raise ValueError("limit must be > 0")
 
+    # ── Source override (relevance feedback): skip DB, go straight to pipeline ──
+    if _source_override is not None:
+        source = _source_override
+        filter_emb = None
+        if tags:
+            filter_emb = await embed_text(" ".join(tags))
+        session = await data.get_session()
+        try:
+            candidates = await _expand_pool(session, source, seed=seed, tags=tags)
+            scored = await score_many(
+                source, candidates, session=session, seed=seed, tags=tags,
+                filter_embedding=filter_emb, source_readme_tokens=None,
+            )
+            final = rerank(source, scored, limit=limit, seed=seed)
+            cosine_lookup = _build_cosine_lookup(candidates)
+            scored_repos = []
+            for repo, sc, features in final:
+                cs = cosine_lookup.get(repo.id, 0.0)
+                scored_repos.append(_build_scored_repo(source, repo, sc, cs, features=features))
+            result = ScoredRecommendation(source_repo=full_name, repos=scored_repos)
+            return result
+        finally:
+            await session.close()
+
+    # ── Normal flow: DB lookup → quick_save → live embed → pipeline ──
     owner, _, name = full_name.partition("/")
     if not owner or not name:
         raise LookupError(f"repo must be 'owner/name', got {full_name!r}")

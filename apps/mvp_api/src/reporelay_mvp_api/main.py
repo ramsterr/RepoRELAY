@@ -27,6 +27,7 @@ from sqlalchemy import text
 from reporelay_mvp import data as mvp_data
 from reporelay_mvp import recommend as recommend_fn
 from reporelay_mvp import recommend_random as explore_fn
+from reporelay_mvp.feedback import more_like_these
 from reporelay_mvp.trending import USER_AGENT, scrape_trending
 
 logging.basicConfig(level=logging.INFO)
@@ -84,6 +85,14 @@ class ScoredRepoOut(BaseModel):
 class RecommendResponse(BaseModel):
     source_repo: str
     repos: list[ScoredRepoOut]
+    from_cache: bool = False
+
+
+class MoreLikeTheseRequest(BaseModel):
+    picked: list[str] = Field(..., min_length=1, max_length=20, description="Repo full_names to merge (e.g. ['pallets/flask', 'django/django'])")
+    limit: int = Field(10, ge=1, le=50)
+    seed: int | None = Field(None, description="Seed for deterministic variation")
+    tags: str | None = Field(None, description="Comma-separated tag filter")
 
 
 class HealthResponse(BaseModel):
@@ -377,6 +386,48 @@ async def random_repos(
     finally:
         await session.close()
     return PopularResponse(repos=repos)
+
+
+    return TrendingResponse(repos=repos[:limit])
+
+
+@app.post("/recommend/more", response_model=RecommendResponse)
+async def more_like(
+    body: MoreLikeTheseRequest,
+) -> RecommendResponse:
+    """Get repos similar to a set of user-selected repos.
+
+    Merges the picked repos into a virtual source, then runs the
+    standard recommendation pipeline. This implements relevance
+    feedback — "Show me more repos like these".
+
+    Example:
+        POST /recommend/more
+        {"picked": ["pallets/flask", "django/django"], "limit": 10}
+    """
+    tag_list: list[str] | None = None
+    if body.tags:
+        tag_list = [t.strip().lower() for t in body.tags.split(",") if t.strip()]
+
+    try:
+        rec = await more_like_these(
+            body.picked,
+            limit=body.limit,
+            seed=body.seed,
+            tags=tag_list,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("more-like-these failed for %s", body.picked)
+        raise HTTPException(status_code=500, detail="internal error") from exc
+
+    return RecommendResponse(
+        source_repo=rec.source_repo,
+        repos=[ScoredRepoOut(**{k: v for k, v in r.model_dump().items() if k != "dependencies"}) for r in rec.repos],
+    )
 
 
 @app.get("/recommend", response_model=RecommendResponse)

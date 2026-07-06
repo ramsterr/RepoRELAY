@@ -132,11 +132,20 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 
   var totalCountByTopic = {};
 
-  function loadTopicDetail(topic) {
+  var currentTopic = null;
+  var currentPage = 0;
+  var pageSize = 20;
+
+  function loadTopicDetail(topic, page) {
+    page = page || 0;
+    currentTopic = topic;
+    currentPage = page;
+
     var detail = document.getElementById("topic-detail");
     if (!detail) return;
     detail.innerHTML = '<div class="loading">loading ' + esc(topic) + '…</div>';
     detail.scrollIntoView({ behavior: "smooth" });
+
     var allCards = document.querySelectorAll(".topic-card");
     for (var k = 0; k < allCards.length; k++) {
       allCards[k].classList.remove("active");
@@ -144,7 +153,8 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     var activeCard = document.querySelector('.topic-card[data-topic="' + topic + '"]');
     if (activeCard) activeCard.classList.add("active");
 
-    cachedFetchWithRetry(API + "/popular?topic=" + encodeURIComponent(topic) + "&limit=10", {
+    var url = API + "/popular?topic=" + encodeURIComponent(topic) + "&limit=" + pageSize + "&offset=" + (page * pageSize);
+    cachedFetchWithRetry(url, {
       timeout: 12000,
       onSlow: function () {
         var d = document.getElementById("topic-detail");
@@ -152,16 +162,25 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
       },
     })
       .then(function (data) {
-        var total = totalCountByTopic[topic] || 0;
-        var shown = Math.min(10, data.repos.length);
+        var total = data.total || totalCountByTopic[topic] || 0;
+        var shown = data.repos.length;
+        var totalPages = Math.ceil(total / pageSize);
+
+        var paginationHtml = '';
+        if (totalPages > 1) {
+          paginationHtml = '<div class="pagination" style="margin:1rem 0;display:flex;align-items:center;gap:0.35rem;">';
+          for (var p = 0; p < totalPages; p++) {
+            var activeClass = p === page ? 'btn-accent' : 'btn-outline';
+            paginationHtml += '<button class="btn ' + activeClass + '" style="padding:0.3rem 0.7rem;font-size:0.78rem;min-width:2rem;" onclick="loadTopicDetail(\'' + esc(topic) + '\',' + p + ')">' + (p + 1) + '</button>';
+          }
+          paginationHtml += '</div>';
+        }
+
         var titleHtml =
           '<p class="section-label" style="margin-top: 1.5rem;">' +
-          'showing ' + shown + ' of ' + fmt(total) + ' <strong>' + esc(topic) + '</strong> repos &nbsp;' +
-          '<a href="/repo?repo=' + encodeURIComponent(data.repos[0]?.full_name || '') + '" ' +
-          'class="btn btn-outline" style="display:inline-block;font-size:0.78rem;padding:0.35rem 0.8rem;">' +
-          'recommend from top</a>' +
+          'page ' + (page + 1) + ' of ' + totalPages + ' · ' + fmt(total) + ' <strong>' + esc(topic) + '</strong> repos' +
           '</p>';
-        detail.innerHTML = titleHtml + renderRepos(data.repos);
+        detail.innerHTML = titleHtml + paginationHtml + renderRepos(data.repos) + paginationHtml;
       })
       .catch(function (e) {
         var msg = (e && e.message) || "failed to load";
@@ -170,7 +189,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
           '<br><button type="button" class="btn btn-outline" style="margin-top:0.5rem;font-size:0.8rem;padding:0.35rem 0.85rem;" id="retry-topic">retry</button>' +
           '</div>';
         var rb = document.getElementById("retry-topic");
-        if (rb) rb.addEventListener("click", function () { loadTopicDetail(topic); });
+        if (rb) rb.addEventListener("click", function () { loadTopicDetail(topic, page); });
       });
   }
 

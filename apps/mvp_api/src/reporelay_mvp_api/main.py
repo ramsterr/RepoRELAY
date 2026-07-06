@@ -191,17 +191,25 @@ class PopularRepo(BaseModel):
 
 class PopularResponse(BaseModel):
     repos: list[PopularRepo]
+    total: int = 0
 
 
 @app.get("/popular", response_model=PopularResponse)
 async def popular(
     limit: int = Query(8, ge=1, le=50),
+    offset: int = Query(0, ge=0),
     topic: str | None = Query(None, description="Filter repos by topic"),
 ) -> PopularResponse:
-    """Top repos by stars — used by the homepage examples list and explore page."""
+    """Top repos by stars — supports pagination via offset."""
     session = await mvp_data.get_session()
     try:
+        total = 0
         if topic:
+            total_row = await session.execute(
+                text("SELECT COUNT(*) FROM mvp_repos WHERE :topic = ANY(topics)"),
+                {"topic": topic},
+            )
+            total = total_row.scalar() or 0
             rows = await session.execute(
                 text(
                     """
@@ -210,10 +218,10 @@ async def popular(
                     FROM mvp_repos
                     WHERE :topic = ANY(topics)
                     ORDER BY stars DESC
-                    LIMIT :limit
+                    LIMIT :limit OFFSET :offset
                     """
                 ),
-                {"topic": topic, "limit": limit},
+                {"topic": topic, "limit": limit, "offset": offset},
             )
         else:
             rows = await session.execute(
@@ -241,7 +249,7 @@ async def popular(
         ]
     finally:
         await session.close()
-    return PopularResponse(repos=repos)
+    return PopularResponse(repos=repos, total=total)
 
 
 class TopicInfo(BaseModel):
@@ -409,38 +417,30 @@ async def random_repos(
     return TrendingResponse(repos=repos[:limit])
 
 
-@app.post("/recommend/more", response_model=RecommendResponse)
+@app.post("/recommend/more")
 async def more_like(
     body: MoreLikeTheseRequest,
-) -> RecommendResponse:
-    """Get repos similar to a set of user-selected repos.
+):
+    """Get repos similar to selected repos.
 
-    Merges the picked repos into a virtual source, then runs the
-    standard recommendation pipeline. This implements relevance
-    feedback — "Show me more repos like these".
-
-    Example:
-        POST /recommend/more
-        {"picked": ["pallets/flask", "django/django"], "limit": 10}
+    Returns merged recommendations first (aligned with ALL picks),
+    then per-repo recommendations with sub-categories.
     """
-    tag_list: list[str] | None = None
-    if body.tags:
-        tag_list = [t.strip().lower() for t in body.tags.split(",") if t.strip()]
-
     try:
         rec = await more_like_these(
             body.picked,
             limit=body.limit,
             seed=body.seed,
-            tags=tag_list,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("more-like-these failed for %s", body.picked)
         raise HTTPException(status_code=500, detail="internal error") from exc
+
+    return rec
 
     return RecommendResponse(
         source_repo=rec.source_repo,

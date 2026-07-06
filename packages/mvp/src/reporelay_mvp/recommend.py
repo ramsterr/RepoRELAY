@@ -308,7 +308,7 @@ async def recommend(
         try:
             candidates = await generate_candidates(session, source, seed=seed, tags=tags)
             scored = await score_many(
-                source, candidates, session=session, seed=seed, tags=tags,
+                source, candidates, seed=seed, tags=tags,
                 filter_embedding=filter_emb, source_readme_tokens=None,
             )
             final = rerank(source, scored, limit=limit, seed=seed)
@@ -1122,7 +1122,7 @@ async def recommend_random(
 
         candidates = await _expand_pool(session, source, seed=seed)
 
-        scored = await score_many(source, candidates, session=session, seed=seed)
+        scored = await score_many(source, candidates, seed=seed)
         final = rerank(source, scored, limit=limit, seed=seed)
 
         cosine_lookup = _build_cosine_lookup(candidates)

@@ -295,12 +295,43 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         return res.json();
       })
       .then(function (data) {
-        var repos = data.repos || [];
         var seedText = currentSeed !== undefined ? " (seed: " + currentSeed + ")" : "";
-        headerEl.textContent = repos.length + " recommendations" + seedText;
+        var allRepos = [];
+        var html = "";
+
+        // Section 1: Merged — repos aligned with ALL picks
+        var merged = data.merged || [];
+        if (merged.length > 0) {
+          for (var m = 0; m < merged.length; m++) {
+            html += '<div class="group-section"><h3 class="group-label">' + merged[m].label + ' <span class="group-signal">(aligned with all picks)</span></h3>';
+            for (var i = 0; i < merged[m].repos.length; i++) {
+              allRepos.push(merged[m].repos[i]);
+              html += renderRepoCard(merged[m].repos[i]);
+            }
+            html += '</div>';
+          }
+        }
+
+        // Section 2: Per-repo — each picked repo's recommendations
+        var picked = data.picked || [];
+        for (var p = 0; p < picked.length; p++) {
+          var pr = picked[p];
+          var pgroups = pr.groups || [];
+          html += '<div class="group-section"><h3 class="group-label">From ' + pr.repo + ' <span class="group-signal">(per-repo recommendations)</span></h3>';
+          for (var g = 0; g < pgroups.length; g++) {
+            html += '<h4 class="group-sub-label">' + pgroups[g].label + '</h4>';
+            for (var j = 0; j < pgroups[g].repos.length; j++) {
+              allRepos.push(pgroups[g].repos[j]);
+              html += renderRepoCard(pgroups[g].repos[j]);
+            }
+          }
+          html += '</div>';
+        }
+
+        headerEl.textContent = allRepos.length + " recommendations" + seedText;
         document.getElementById("page-title").textContent = "more like these";
         document.getElementById("subtitle").innerHTML = "picked: " + data.source_repo + ' <a href="/" style="color:var(--accent-dim);">&larr; back</a>';
-        resultsEl.innerHTML = renderResults(repos);
+        resultsEl.innerHTML = html;
         bindCheckboxes();
         pickedRepos = [];
         updatePickedUI();

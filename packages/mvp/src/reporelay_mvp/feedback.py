@@ -2,20 +2,16 @@
 Relevance feedback: "Show me more repos like these selected ones."
 
 When a user picks repos from recommendations and clicks "Show more
-like these", we merge their properties into a virtual source repo,
-then run the standard recommendation pipeline against it.
+like these", we:
+  1. Merge them into a virtual source → find repos aligned with ALL picks
+  2. Run each picked repo individually → show each repo's specific recs
 
-The merge is an intelligent average:
-  - Embeddings: element-wise average (centroid in vector space)
-  - Topics: union (captures the domain intersection)
-  - Language: most common
-  - Dependencies: union
-  - Stars: average
+The response has three sections:
+  - merged: repos matching all picked repos (centroid in vector space)
+  - picked: per-repo recommendations (one per picked repo, sub-categorized)
 
-This produces a "virtual repo" that captures the user's intent —
-e.g., picking "flask" + "django" + "fastapi" creates a virtual
-source that represents "Python web frameworks" better than any
-single repo could.
+This lets the user see both the intersection and the per-repo specifics
+in one response.
 """
 
 from __future__ import annotations
@@ -32,95 +28,46 @@ logger = logging.getLogger(__name__)
 
 
 def merge_sources(sources: list[Repo]) -> Repo:
-    """Merge multiple repos into a virtual source Repo.
-
-    Each property is averaged/unioned to create a single virtual repo
-    that captures the common signals across all picked repos.
-
-    Args:
-        sources: List of Repo objects to merge. Must be non-empty.
-
-    Returns:
-        A single Repo with merged properties.
-    """
+    """Merge multiple repos into a virtual source Repo by averaging."""
     if not sources:
         raise ValueError("At least one source repo is required")
 
     n = len(sources)
 
-    # ── Language: most common ────────────────────────────────────
     langs = [s.language for s in sources if s.language]
     language = Counter(langs).most_common(1)[0][0] if langs else None
 
-    # ── Topics: union ────────────────────────────────────────────
     all_topics: list[str] = []
     for s in sources:
         all_topics.extend(s.topics)
-    topics = list(dict.fromkeys(all_topics))  # dedupe, preserve order
+    topics = list(dict.fromkeys(all_topics))
 
-    # ── Dependencies: union ──────────────────────────────────────
     all_deps: list[str] = []
     for s in sources:
         all_deps.extend(s.dependencies)
     deps = list(dict.fromkeys(all_deps))
 
-    # ── Stars: average ───────────────────────────────────────────
     avg_stars = sum(s.stars for s in sources) // n
 
-    # ── Embedding (README): element-wise average ─────────────────
     embeddings = [s.embedding for s in sources if s.embedding and any(v != 0.0 for v in s.embedding)]
+    merged_embedding = None
     if embeddings:
-        merged_embedding = [
-            sum(vec[i] for vec in embeddings) / len(embeddings)
-            for i in range(len(embeddings[0]))
-        ]
-    else:
-        merged_embedding = None
+        merged_embedding = [sum(vec[i] for vec in embeddings) / len(embeddings) for i in range(len(embeddings[0]))]
 
-    # ── Description embedding: element-wise average ──────────────
-    desc_embs = [
-        s.description_embedding
-        for s in sources
-        if s.description_embedding and any(v != 0.0 for v in s.description_embedding)
-    ]
+    desc_embs = [s.description_embedding for s in sources if s.description_embedding and any(v != 0.0 for v in s.description_embedding)]
+    merged_desc_emb = None
     if desc_embs:
-        merged_desc_emb = [
-            sum(vec[i] for vec in desc_embs) / len(desc_embs)
-            for i in range(len(desc_embs[0]))
-        ]
-    else:
-        merged_desc_emb = None
+        merged_desc_emb = [sum(vec[i] for vec in desc_embs) / len(desc_embs) for i in range(len(desc_embs[0]))]
 
-    # ── Description: first non-empty ─────────────────────────────
     description = next((s.description for s in sources if s.description), None)
-
-    # ── Trending: average ────────────────────────────────────────
     avg_trending = sum(s.trending_score for s in sources) / n
 
-    # ── Build the virtual repo ───────────────────────────────────
     virtual = Repo(
-        id=0,  # placeholder — virtual, doesn't exist in DB
-        owner="virtual",
-        name="merged",
-        full_name="virtual/merged",
-        description=description,
-        language=language,
-        topics=topics,
-        stars=avg_stars,
-        dependencies=deps,
-        embedding=merged_embedding,
-        description_embedding=merged_desc_emb,
+        id=0, owner="virtual", name="merged", full_name="virtual/merged",
+        description=description, language=language, topics=topics,
+        stars=avg_stars, dependencies=deps,
+        embedding=merged_embedding, description_embedding=merged_desc_emb,
         trending_score=avg_trending,
-    )
-
-    logger.info(
-        "merged %d repos → virtual source (%s, %d topics, %d deps, embeddings=%s/%s)",
-        n,
-        language or "?",
-        len(topics),
-        len(deps),
-        "yes" if merged_embedding else "no",
-        "yes" if merged_desc_emb else "no",
     )
     return virtual
 
@@ -130,57 +77,60 @@ async def more_like_these(
     *,
     limit: int = 10,
     seed: int | None = None,
-    tags: list[str] | None = None,
 ):
-    """Get repos similar to a set of user-selected repos.
+    """Get merged + per-repo recommendations for user-selected repos.
 
-    Fetches each picked repo from the DB (live-embeds if missing),
-    merges them into a virtual source, and runs the standard
-    recommendation pipeline.
-
-    Args:
-        picked: List of repo full_names to merge (e.g. ["flask/flask", "django/django"])
-        limit: Number of results
-        seed: Deterministic variation seed
-        tags: Optional tag filter
-
-    Returns:
-        ScoredRecommendation with the virtual source and ranked results.
+    Returns a dict with:
+      - source_repo: "A + B"
+      - merged: recommendations for the virtual merged source
+      - picked: list of {repo: ..., groups: ...} per picked repo
     """
     if not picked:
         raise ValueError("At least one repo must be selected")
 
     from reporelay_mvp import data
 
+    # Fetch all picked repos from DB
     sources: list[Repo] = []
     session = await data.get_session()
     try:
         for full_name in picked:
             source = await data.get_repo(session, full_name)
-            if source is None:
+            if source:
+                sources.append(source)
+            else:
                 logger.warning("picked repo %s not in DB — skipping", full_name)
-                continue
-            sources.append(source)
     finally:
         await session.close()
 
     if not sources:
         raise ValueError("None of the picked repos were found in the DB")
 
-    # Merge into virtual source
-    virtual_source = merge_sources(sources)
-
-    # Run standard pipeline with "virtual/merged" as the source name
-    result = await recommend_fn(
-        "virtual/merged",
-        limit=limit,
-        seed=seed,
-        tags=tags,
-        _source_override=virtual_source,
+    # 1. Merged: virtual source from all picked repos
+    virtual = merge_sources(sources)
+    merged_result = await recommend_fn(
+        "virtual/merged", limit=limit, seed=seed,
+        _source_override=virtual,
     )
 
-    # Override source_repo to show what the user picked
-    result.source_repo = " + ".join(picked[:5])
-    if len(picked) > 5:
-        result.source_repo += f" +{len(picked) - 5} more"
-    return result
+    # 2. Per-repo: each picked repo individually
+    picked_results = []
+    for src in sources:
+        try:
+            rec = await recommend_fn(
+                src.full_name, limit=limit // 2, seed=seed,
+                _source_override=src,
+            )
+            groups_out = [{"label": g.label, "signal": g.signal, "repos": [r.model_dump() for r in g.repos]} for g in rec.groups]
+            picked_results.append({"repo": src.full_name, "groups": groups_out})
+        except Exception as exc:
+            logger.warning("per-repo rec failed for %s: %s", src.full_name, exc)
+
+    merged_groups = [{"label": g.label, "signal": g.signal, "repos": [r.model_dump() for r in g.repos]} for g in merged_result.groups]
+
+    return {
+        "source_repo": " + ".join(picked[:5]) + (f" +{len(picked)-5} more" if len(picked) > 5 else ""),
+        "merged": merged_groups,
+        "picked": picked_results,
+        "from_cache": False,
+    }

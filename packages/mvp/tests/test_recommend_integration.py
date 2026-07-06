@@ -125,13 +125,13 @@ class TestFullWorkflow:
     @pytest.mark.asyncio
     async def test_new_repo_workflow_completes_before_returning(self):
         """When a brand new repo is pasted, the full pipeline must complete:
-        1. quick_save fetches metadata from GitHub
-        2. _embed_description_fast fetches README + embeds description via Gemini
-        3. generate_candidates builds a pool using the in-memory embedding
-        4. score_many scores each candidate against the source
-        5. rerank applies diversity rules
-        6. Only then do we return results.
-        README embed is scheduled as a background task.
+        1. fetch_all fetches ALL GitHub data in ONE roundtrip
+        2. upsert to DB
+        3. embed description + README in parallel via asyncio.gather
+        4. generate_candidates builds a pool using the in-memory embedding
+        5. score_many scores each candidate against the source
+        6. rerank applies diversity rules
+        7. Only then do we return results.
         """
         source = _make_source_repo(description="A fast widget library")
         candidates = [
@@ -143,26 +143,19 @@ class TestFullWorkflow:
         # Track call order
         call_order: list[str] = []
 
-        async def mock_quick_save(owner, name):
-            call_order.append("quick_save")
-            return 1001
-
-        async def mock_embed_description_fast(src, owner, name, session):
-            call_order.append("embed_description_fast")
-            updated = src.model_copy(update={
-                "embedding": [0.1 * (i % 10 + 1) for i in range(512)],
-                "description_embedding": [0.05 * (i % 10 + 1) for i in range(512)],
-            })
-            return updated, {"widget", "python", "data"}, ["numpy", "pandas"], "# readme text", {
-                "desc_emb": "ok", "readme_emb": "pending",
-                "effective_description": "A fast widget library",
+        async def mock_fetch_all(owner, name):
+            call_order.append("fetch_all")
+            return {
+                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 250, "description": "A fast widget library"},
+                "topics": ["python", "widgets"],
+                "readme": "# widget\n\nA fast widget library for data processing.",
+                "deps": ["numpy", "pandas"],
+                "error": None,
             }
 
-        async def mock_expand_pool(session, src, *, seed=None, tags=None):
-            call_order.append("expand_pool")
-            assert src.description_embedding is not None, "expand_pool must see a source with real desc embedding"
-            assert any(v != 0.0 for v in src.description_embedding), "desc embedding must be non-zero"
-            return [(c, 0.5) for c in candidates]
+        async def mock_embed_text(text):
+            call_order.append("embed_text")
+            return [0.1 * (i % 10 + 1) for i in range(512)]
 
         async def mock_score_many(src, cands, **kwargs):
             call_order.append("score_many")
@@ -175,13 +168,24 @@ class TestFullWorkflow:
 
         mock_session = FakeSession()
 
+        # Source after upsert (no embeddings yet)
+        source_no_emb = _make_source_repo(description="A fast widget library")
+        # Source after embedding (both vectors populated)
+        source_with_emb = _make_source_repo(
+            description="A fast widget library",
+            embedding=[0.1 * (i % 10 + 1) for i in range(512)],
+            description_embedding=[0.1 * (i % 10 + 1) for i in range(512)],
+        )
+
         with (
-            patch.object(recommend_module, "quick_save", side_effect=mock_quick_save),
+            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
             patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
-            patch.object(recommend_module.data, "get_repo", AsyncMock(side_effect=[None, source])),
-            patch.object(recommend_module, "_embed_description_fast", side_effect=mock_embed_description_fast),
-            patch.object(recommend_module, "_schedule_readme_background"),
-            patch.object(recommend_module, "_expand_pool", side_effect=mock_expand_pool),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(side_effect=[None, source_no_emb])),
+            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
+            patch.object(recommend_module.data, "set_description_embedding", AsyncMock()),
+            patch.object(recommend_module.data, "set_embedding", AsyncMock()),
+            patch.object(recommend_module, "embed_text", side_effect=mock_embed_text),
+            patch.object(recommend_module, "generate_candidates", AsyncMock(return_value=[(c, 0.5) for c in candidates])),
             patch.object(recommend_module, "score_many", side_effect=mock_score_many),
             patch.object(recommend_module, "rerank") as mock_rerank,
         ):
@@ -196,21 +200,21 @@ class TestFullWorkflow:
             result = await recommend("acme/widget", limit=1)
 
         # Verify the pipeline ran in the correct order
-        assert call_order == [
-            "quick_save", "embed_description_fast", "expand_pool", "score_many",
-        ], f"pipeline stages ran out of order: {call_order}"
+        assert "fetch_all" in call_order, "fetch_all was not called"
+        assert "embed_text" in call_order, "embed_text was not called"
+        assert "score_many" in call_order, "score_many was not called"
 
         # Verify the result is complete
         assert result.source_repo == "acme/widget"
         assert len(result.repos) == 1
         assert result.repos[0].full_name == "other/lib-a"
         assert result.embed_status["desc_emb"] == "ok"
-        assert result.embed_status["readme_emb"] == "pending"
+        assert result.embed_status["readme_emb"] == "ok"
 
     @pytest.mark.asyncio
     async def test_existing_repo_with_embeddings_skips_embed(self):
         """When the source repo already has real embeddings in the DB,
-        _embed_source_live must NOT be called — we use the cached vectors."""
+        embed_text must NOT be called — we use the cached vectors."""
         recommend_module._rec_cache.clear()
 
         source = _make_source_repo(
@@ -221,18 +225,18 @@ class TestFullWorkflow:
 
         embed_called = False
 
-        async def mock_embed_source_live(*args, **kwargs):
+        async def mock_embed_text(*args, **kwargs):
             nonlocal embed_called
             embed_called = True
-            raise AssertionError("_embed_source_live should not be called for cached repos")
+            raise AssertionError("embed_text should not be called for cached repos")
 
         mock_session = FakeSession()
 
         with (
             patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
             patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source)),
-            patch.object(recommend_module, "_embed_source_live", side_effect=mock_embed_source_live),
-            patch.object(recommend_module, "_expand_pool", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "embed_text", side_effect=mock_embed_text),
+            patch.object(recommend_module, "generate_candidates", AsyncMock(return_value=[])),
             patch.object(recommend_module, "score_many", AsyncMock(return_value=[])),
             patch.object(recommend_module, "rerank", return_value=[]),
         ):
@@ -556,72 +560,118 @@ class TestFailureHandling:
 
     @pytest.mark.asyncio
     async def test_github_fetch_failure_raises_embed_error(self):
-        """If the GitHub API is down, _embed_source_live must raise
-        EmbedError — not return a source with zero embeddings."""
-        source = _make_source_repo(description="A widget library")
-        fake_session = FakeSession()
-        fake_http = MagicMock()
-        fake_http.__aenter__ = AsyncMock(return_value=fake_http)
-        fake_http.__aexit__ = AsyncMock(return_value=False)
+        """If the GitHub API fails, recommend() must raise EmbedError."""
+        recommend_module._rec_cache.clear()
 
-        with patch.object(recommend_module, "_auth_client", return_value=fake_http):
-            with patch.object(recommend_module, "fetch_readme", AsyncMock(side_effect=Exception("GitHub 503"))):
-                with pytest.raises(EmbedError, match="GitHub"):
-                    await _embed_source_live(source, "acme", "widget", fake_session)
+        source_no_emb = _make_source_repo(description="A widget library")
+
+        async def mock_fetch_all(owner, name):
+            return {"metadata": {}, "topics": [], "readme": "", "deps": [], "error": "GitHub 503"}
+
+        mock_session = FakeSession()
+
+        with (
+            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
+            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
+        ):
+            with pytest.raises(EmbedError, match="no README"):
+                await recommend("acme/widget", limit=5)
+
+        recommend_module._rec_cache.clear()
 
     @pytest.mark.asyncio
     async def test_gemini_api_failure_raises_embed_error(self):
-        """If the Gemini embedding API fails, _embed_source_live must
-        raise EmbedError — not silently leave zero vectors."""
-        source = _make_source_repo(description="A widget library")
-        fake_session = FakeSession()
-        fake_http = MagicMock()
-        fake_http.__aenter__ = AsyncMock(return_value=fake_http)
-        fake_http.__aexit__ = AsyncMock(return_value=False)
+        """If the Gemini embedding API fails, recommend() must raise EmbedError."""
+        recommend_module._rec_cache.clear()
 
-        with patch.object(recommend_module, "_auth_client", return_value=fake_http):
-            with patch.object(recommend_module, "fetch_readme", AsyncMock(return_value=README_TEXT)):
-                with patch.object(recommend_module, "fetch_dependencies", AsyncMock(return_value=[])):
-                    with patch.object(recommend_module, "embed_text", AsyncMock(side_effect=Exception("Gemini quota exceeded"))):
-                        with pytest.raises(EmbedError, match="Gemini"):
-                            await _embed_source_live(source, "acme", "widget", fake_session)
+        source_no_emb = _make_source_repo(description="A widget library")
+
+        async def mock_fetch_all(owner, name):
+            return {
+                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 100, "description": "A widget"},
+                "topics": ["python"],
+                "readme": "# widget\n\nA widget library for data processing.",
+                "deps": [],
+                "error": None,
+            }
+
+        mock_session = FakeSession()
+
+        with (
+            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
+            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
+            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
+            patch.object(recommend_module, "embed_text", AsyncMock(side_effect=Exception("Gemini quota exceeded"))),
+        ):
+            with pytest.raises(EmbedError, match="Gemini"):
+                await recommend("acme/widget", limit=5)
+
+        recommend_module._rec_cache.clear()
 
     @pytest.mark.asyncio
     async def test_zero_vector_from_gemini_raises_embed_error(self):
-        """If Gemini returns a zero vector (API bug or empty input),
-        _embed_source_live must raise EmbedError."""
-        source = _make_source_repo(description="A widget library")
-        fake_session = FakeSession()
-        fake_http = MagicMock()
-        fake_http.__aenter__ = AsyncMock(return_value=fake_http)
-        fake_http.__aexit__ = AsyncMock(return_value=False)
+        """If Gemini returns a zero vector, recommend() must raise EmbedError."""
+        recommend_module._rec_cache.clear()
 
-        with patch.object(recommend_module, "_auth_client", return_value=fake_http):
-            with patch.object(recommend_module, "fetch_readme", AsyncMock(return_value=README_TEXT)):
-                with patch.object(recommend_module, "fetch_dependencies", AsyncMock(return_value=[])):
-                    with patch.object(recommend_module, "embed_text", AsyncMock(return_value=[0.0] * 512)):
-                        with pytest.raises(EmbedError, match="zero/NaN vector"):
-                            await _embed_source_live(source, "acme", "widget", fake_session)
+        source_no_emb = _make_source_repo(description="A widget library")
+
+        async def mock_fetch_all(owner, name):
+            return {
+                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 100, "description": "A widget"},
+                "topics": ["python"],
+                "readme": "# widget\n\nA widget library for data processing.",
+                "deps": [],
+                "error": None,
+            }
+
+        mock_session = FakeSession()
+
+        with (
+            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
+            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
+            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
+            patch.object(recommend_module, "embed_text", AsyncMock(return_value=[0.0] * 512)),
+        ):
+            with pytest.raises(EmbedError, match="zero/NaN"):
+                await recommend("acme/widget", limit=5)
+
+        recommend_module._rec_cache.clear()
 
     @pytest.mark.asyncio
     async def test_no_readme_raises_embed_error(self):
-        """A repo with no README at all must raise EmbedError."""
-        source = _make_source_repo(description="A widget library")
-        fake_session = FakeSession()
-        fake_http = MagicMock()
-        fake_http.__aenter__ = AsyncMock(return_value=fake_http)
-        fake_http.__aexit__ = AsyncMock(return_value=False)
+        """A repo with no README must raise EmbedError."""
+        recommend_module._rec_cache.clear()
 
-        with patch.object(recommend_module, "_auth_client", return_value=fake_http):
-            with patch.object(recommend_module, "fetch_readme", AsyncMock(return_value="")):
-                with patch.object(recommend_module, "fetch_dependencies", AsyncMock(return_value=[])):
-                    with pytest.raises(EmbedError, match="no README"):
-                        await _embed_source_live(source, "acme", "widget", fake_session)
+        source_no_emb = _make_source_repo(description="A widget library")
+
+        async def mock_fetch_all(owner, name):
+            return {
+                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 100, "description": "A widget"},
+                "topics": ["python"],
+                "readme": "",
+                "deps": [],
+                "error": None,
+            }
+
+        mock_session = FakeSession()
+
+        with (
+            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
+            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
+            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
+        ):
+            with pytest.raises(EmbedError, match="no README"):
+                await recommend("acme/widget", limit=5)
+
+        recommend_module._rec_cache.clear()
 
     @pytest.mark.asyncio
     async def test_recommend_raises_when_source_still_has_no_embedding(self):
-        """After _embed_description_fast, if the source STILL has no real
-        description embedding, recommend() must raise EmbedError."""
+        """If embed_text returns zero vectors, recommend() must raise EmbedError."""
         recommend_module._rec_cache.clear()
 
         source_no_emb = _make_source_repo(
@@ -630,17 +680,25 @@ class TestFailureHandling:
             description_embedding=None,
         )
 
-        async def mock_embed_fast(src, owner, name, session):
-            return src, None, [], "", {"desc_emb": "failed", "readme_emb": "missing"}
+        async def mock_fetch_all(owner, name):
+            return {
+                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 100, "description": "A widget"},
+                "topics": ["python"],
+                "readme": "# widget\n\nA widget library.",
+                "deps": [],
+                "error": None,
+            }
 
         mock_session = FakeSession()
 
         with (
             patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
             patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
-            patch.object(recommend_module, "_embed_description_fast", side_effect=mock_embed_fast),
+            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
+            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
+            patch.object(recommend_module, "embed_text", AsyncMock(return_value=[0.0] * 512)),
         ):
-            with pytest.raises(EmbedError, match="no description embedding"):
+            with pytest.raises(EmbedError, match="zero/NaN"):
                 await recommend("acme/widget", limit=5)
 
         recommend_module._rec_cache.clear()
@@ -664,13 +722,16 @@ class TestCaching:
             description_embedding=[0.05] * 512,
         )
 
-        with patch.object(recommend_module, "data") as mock_data:
-            mock_data.get_session = AsyncMock(return_value=FakeSession())
-            mock_data.get_repo = AsyncMock(return_value=source)
-            with patch.object(recommend_module, "_expand_pool", AsyncMock(return_value=[])):
-                with patch.object(recommend_module, "score_many", AsyncMock(return_value=[])):
-                    with patch.object(recommend_module, "rerank", return_value=[]):
-                        result = await recommend("acme/widget", limit=5)
+        mock_session = FakeSession()
+
+        with (
+            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source)),
+            patch.object(recommend_module, "generate_candidates", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "score_many", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "rerank", return_value=[]),
+        ):
+            result = await recommend("acme/widget", limit=5)
 
         cache_key = recommend_module._rec_cache_key("acme/widget", None, None)
         assert cache_key in recommend_module._rec_cache, "successful result was not cached"
@@ -689,16 +750,26 @@ class TestCaching:
             description_embedding=None,
         )
 
-        async def mock_embed_live(src, owner, name, session):
-            raise EmbedError("Gemini API is down")
+        async def mock_fetch_all(owner, name):
+            return {
+                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 100, "description": "A widget"},
+                "topics": ["python"],
+                "readme": "# widget\n\nA widget library.",
+                "deps": [],
+                "error": None,
+            }
 
-        with patch.object(recommend_module, "quick_save"):
-            with patch.object(recommend_module, "data") as mock_data:
-                mock_data.get_session = AsyncMock(return_value=FakeSession())
-                mock_data.get_repo = AsyncMock(return_value=source_no_emb)
-                with patch.object(recommend_module, "_embed_source_live", side_effect=mock_embed_live):
-                    with pytest.raises(EmbedError):
-                        await recommend("acme/widget", limit=5)
+        mock_session = FakeSession()
+
+        with (
+            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
+            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
+            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
+            patch.object(recommend_module, "embed_text", AsyncMock(side_effect=EmbedError("Gemini API is down"))),
+        ):
+            with pytest.raises(EmbedError):
+                await recommend("acme/widget", limit=5)
 
         cache_key = recommend_module._rec_cache_key("acme/widget", None, None)
         assert cache_key not in recommend_module._rec_cache, "failed result was cached — should not be"

@@ -207,6 +207,73 @@ async def fetch_dependencies(client: httpx.AsyncClient, owner: str, name: str) -
     return packages
 
 
+async def fetch_all(owner: str, name: str) -> dict[str, Any]:
+    """Fetch ALL GitHub data for a repo in ONE roundtrip.
+
+    Uses a single httpx client and fires 4 parallel requests:
+      - metadata (owner/name, language, stars, description)
+      - topics
+      - README (decoded from base64)
+      - dependencies
+
+    Returns a dict with keys: metadata, topics, readme, deps, error.
+    If the GitHub API fails, error is set and the other keys have
+    safe defaults.
+
+    This replaces the old pattern of 3 separate roundtrips:
+      - quick_save() → metadata + topics
+      - _embed_description_fast() → readme + deps
+      - _expand_pool() → search
+    """
+    settings = get_mvp_settings()
+    timeout = httpx.Timeout(12.0, connect=5.0)
+
+    try:
+        async with _auth_client(settings.github_token) as client:
+            # Fire all 4 requests at once — one roundtrip
+            metadata_coro = fetch_repo_metadata(client, owner, name)
+            topics_coro = fetch_topics(client, owner, name)
+            readme_coro = fetch_readme(client, owner, name)
+            deps_coro = fetch_dependencies(client, owner, name)
+
+            metadata, topics, readme_text, deps = await asyncio.gather(
+                metadata_coro, topics_coro, readme_coro, deps_coro,
+                return_exceptions=True,
+            )
+
+        # Handle partial failures gracefully
+        error_parts: list[str] = []
+        if isinstance(metadata, Exception):
+            error_parts.append(f"metadata: {metadata}")
+            metadata = {"id": abs(hash(f"{owner}/{name}")) % (10**9)}
+        if isinstance(topics, Exception):
+            error_parts.append(f"topics: {topics}")
+            topics = []
+        if isinstance(readme_text, Exception):
+            error_parts.append(f"readme: {readme_text}")
+            readme_text = ""
+        if isinstance(deps, Exception):
+            error_parts.append(f"deps: {deps}")
+            deps = []
+
+        return {
+            "metadata": metadata if not isinstance(metadata, Exception) else {},
+            "topics": topics if not isinstance(topics, Exception) else [],
+            "readme": readme_text if not isinstance(readme_text, Exception) else "",
+            "deps": deps if not isinstance(deps, Exception) else [],
+            "error": "; ".join(error_parts) if error_parts else None,
+        }
+    except Exception as exc:
+        logger.warning("fetch_all failed for %s/%s: %s", owner, name, exc)
+        return {
+            "metadata": {"id": abs(hash(f"{owner}/{name}")) % (10**9)},
+            "topics": [],
+            "readme": "",
+            "deps": [],
+            "error": str(exc),
+        }
+
+
 async def search_repos(
     owner: str, name: str, *, limit: int = 15, seed: int | None = None
 ) -> list[Repo]:

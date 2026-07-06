@@ -35,10 +35,9 @@ from reporelay_mvp.embedding import embed_text
 from reporelay_mvp.features import compute_features
 from reporelay_mvp.github import (
     _auth_client,
-    _search_item_to_repo,
+    fetch_all,
     fetch_dependencies,
     fetch_readme,
-    quick_save,
     search_repositories,
 )
 from reporelay_mvp.models import Features, Repo, ScoredRecommendation, ScoredRepo
@@ -236,9 +235,9 @@ async def recommend(
     """Run the full recommendation pipeline.
 
     If _source_override is provided, it is used as the source repo
-    directly (skipping DB lookup, quick_save, and live embed). This
-    is used by relevance feedback (feedback.py) to run the pipeline
-    against a virtual merged repo.
+    directly (skipping DB lookup and live embed). This is used by
+    relevance feedback (feedback.py) to run the pipeline against a
+    virtual merged repo.
     """
     if limit <= 0:
         raise ValueError("limit must be > 0")
@@ -251,7 +250,7 @@ async def recommend(
             filter_emb = await embed_text(" ".join(tags))
         session = await data.get_session()
         try:
-            candidates = await _expand_pool(session, source, seed=seed, tags=tags)
+            candidates = await generate_candidates(session, source, seed=seed, tags=tags)
             scored = await score_many(
                 source, candidates, session=session, seed=seed, tags=tags,
                 filter_embedding=filter_emb, source_readme_tokens=None,
@@ -267,85 +266,143 @@ async def recommend(
         finally:
             await session.close()
 
-    # ── Normal flow: DB lookup → quick_save → live embed → pipeline ──
+    # ── Normal flow ─────────────────────────────────────────────────────────
     owner, _, name = full_name.partition("/")
     if not owner or not name:
         raise LookupError(f"repo must be 'owner/name', got {full_name!r}")
 
+    # Check cache first
     cache_key = _rec_cache_key(full_name, seed, tags)
     cache_now = _rec_time.monotonic()
     cached = _rec_cache_get(cache_key, cache_now)
     if cached is not None:
         logger.info("rec cache hit for %s", cache_key)
-        result = ScoredRecommendation(
-            source_repo=cached.source_repo,
-            repos=cached.repos,
-            from_cache=True,
+        return ScoredRecommendation(
+            source_repo=cached.source_repo, repos=cached.repos, from_cache=True,
         )
-        return result
 
     session = await data.get_session()
     try:
+        # ── Step 1: Load or fetch source repo ────────────────────────────
         source = await data.get_repo(session, full_name)
+
         if source is None:
-            logger.info("repo %s not in DB — quick-saving metadata + topics", full_name)
-            await quick_save(owner, name)
-            await session.close()
-            session = await data.get_session()
+            # Repo not in DB — fetch EVERYTHING from GitHub in one roundtrip
+            logger.info("repo %s not in DB — fetching from GitHub", full_name)
+            gh = await fetch_all(owner, name)
+
+            if gh["error"] and not gh["metadata"]:
+                raise LookupError(f"failed to fetch repo {full_name!r} from GitHub: {gh['error']}")
+
+            metadata = gh["metadata"]
+            repo_id = int(metadata.get("id", 0))
+            language = metadata.get("language")
+            stars = int(metadata.get("stargazers_count") or 0)
+            description = metadata.get("description")
+            topics = gh["topics"]
+            deps = gh["deps"]
+
+            await data.upsert_repo(
+                session, repo_id=repo_id, owner=owner, name=name,
+                full_name=full_name, description=description,
+                language=language, topics=topics, stars=stars,
+                dependencies=deps,
+            )
+            await session.commit()
+
+            # Re-read from DB to get the full Repo model
             source = await data.get_repo(session, full_name)
             if source is None:
-                raise LookupError(f"failed to fetch repo {full_name!r} from GitHub")
+                raise LookupError(f"failed to persist repo {full_name!r}")
 
-        # Check if source has real vectors. If not, embed description
-        # synchronously (1 Gemini call, ~3-5s) and schedule README
-        # embed as a background task. This gives the user results in
-        # ~8-12s instead of 15-25s.
+        # ── Step 2: Check if we need to embed ────────────────────────────
         from reporelay_mvp.data import is_real_vector
+
         source_has_desc_emb = is_real_vector(source.description_embedding)
         source_has_readme_emb = is_real_vector(source.embedding)
         source_needs_embed = not source_has_desc_emb or not source_has_readme_emb
 
-        source_readme_tokens = None
-        readme_text_for_bg: str = ""
         embed_status: dict[str, str] = {
             "desc_emb": "cached" if source_has_desc_emb else "missing",
             "readme_emb": "cached" if source_has_readme_emb else "missing",
         }
+        source_readme_tokens: set[str] | None = None
+        readme_text: str = ""
 
         if source_needs_embed:
-            logger.info("repo %s has no real vectors — fast-embedding description", full_name)
+            # Fetch README if we don't have it yet (repo was already in DB
+            # but never had its README fetched)
+            if not readme_text:
+                gh = await fetch_all(owner, name)
+                readme_text = gh["readme"]
+
+            if not readme_text or not readme_text.strip():
+                raise EmbedError(f"repo {owner}/{name} has no README — cannot embed")
+
+            # Build effective description
+            from reporelay_mvp.purpose import get_effective_description
+            effective_description = get_effective_description(source.description, readme_text)
+            if not effective_description:
+                effective_description = readme_text.strip()[:200].replace("\n", " ")
+
+            # Update description if it changed
+            if effective_description != (source.description or ""):
+                await data.upsert_repo(
+                    session, repo_id=source.id, owner=owner, name=name,
+                    full_name=full_name, description=effective_description,
+                    language=source.language, topics=source.topics,
+                    stars=source.stars, dependencies=source.dependencies,
+                )
+                source = source.model_copy(update={"description": effective_description})
+
+            # ── Step 3: Embed description AND README in parallel ──────────
+            # Both texts go to Gemini at the same time via asyncio.gather.
+            # Total time: ~2-3s (one Gemini roundtrip) instead of ~5-7s
+            # (two sequential calls).
+            logger.info("embedding description + README for %s in parallel", full_name)
             try:
-                source, source_readme_tokens, deps, readme_text_for_bg, embed_status = await asyncio.wait_for(
-                    _embed_description_fast(source, owner, name, session),
-                    timeout=25.0,
+                desc_emb, readme_emb = await asyncio.wait_for(
+                    asyncio.gather(
+                        embed_text(effective_description),
+                        embed_text(readme_text[:8000]),
+                    ),
+                    timeout=20.0,
                 )
             except asyncio.TimeoutError:
-                raise EmbedError(
-                    f"description embedding timed out for {full_name} after 25s"
-                ) from None
-            if deps:
-                source = source.model_copy(update={"dependencies": deps})
+                raise EmbedError(f"Gemini embedding timed out for {full_name}") from None
+            except Exception as exc:
+                raise EmbedError(f"Gemini embedding failed for {full_name}: {exc}") from exc
 
-        # Description embedding is REQUIRED — it's the primary signal
-        if not is_real_vector(source.description_embedding):
-            raise EmbedError(
-                f"source repo {full_name} has no description embedding — "
-                "cannot run similarity against the corpus"
-            )
+            # Validate both vectors
+            if not is_real_vector(desc_emb):
+                raise EmbedError(f"description embedding is zero/NaN for {full_name}")
+            if not is_real_vector(readme_emb):
+                raise EmbedError(f"README embedding is zero/NaN for {full_name}")
 
-        # README embedding is optional for the first request — we have
-        # readme_vs_desc_cosine_sim as a fallback. Schedule background
-        # embed so the NEXT request has full quality.
-        if not is_real_vector(source.embedding) and readme_text_for_bg:
-            _schedule_readme_background(source.id, owner, name, readme_text_for_bg)
+            # Persist both to DB in one shot
+            await data.set_description_embedding(session, repo_id=source.id, description_embedding=desc_emb)
+            await data.set_embedding(session, repo_id=source.id, embedding=readme_emb)
+            source = source.model_copy(update={
+                "description_embedding": desc_emb,
+                "embedding": readme_emb,
+            })
 
-        candidates = await _expand_pool(session, source, seed=seed, tags=tags)
+            # Extract README tokens for readme_topic_sim feature
+            from reporelay_mvp.features import _tokenize_readme
+            source_readme_tokens = _tokenize_readme(source.full_name, readme_text)
 
+            await session.commit()
+            embed_status = {"desc_emb": "ok", "readme_emb": "ok"}
+            logger.info("embedding complete for %s (desc=%d, readme=%d chars)",
+                        full_name, len(effective_description), len(readme_text[:8000]))
+
+        # ── Step 4: Generate candidates (DB only — fast) ─────────────────
+        candidates = await generate_candidates(session, source, seed=seed, tags=tags)
+
+        # ── Step 5: Score + rerank ────────────────────────────────────────
         filter_emb = None
         if tags:
-            filter_text = " ".join(tags)
-            logger.info("embedding filter text: %r", filter_text)
-            filter_emb = await embed_text(filter_text)
+            filter_emb = await embed_text(" ".join(tags))
 
         scored = await score_many(
             source, candidates, session=session, seed=seed, tags=tags,
@@ -356,8 +413,8 @@ async def recommend(
         cosine_lookup = _build_cosine_lookup(candidates)
         scored_repos: list[ScoredRepo] = []
         for repo, sc, features in final:
-            cosine_sim = cosine_lookup.get(repo.id, 0.0)
-            scored_repos.append(_build_scored_repo(source, repo, sc, cosine_sim, features=features))
+            cs = cosine_lookup.get(repo.id, 0.0)
+            scored_repos.append(_build_scored_repo(source, repo, sc, cs, features=features))
 
         result = ScoredRecommendation(source_repo=full_name, repos=scored_repos)
         result.from_cache = False

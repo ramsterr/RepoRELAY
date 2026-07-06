@@ -181,9 +181,32 @@ async def _find_proxy_embedding(session: Any, source: Repo) -> list[float] | Non
     by topic overlap + language + comparable popularity and borrow its
     embedding for pgvector search.
 
+    If source has no topics (rate-limited skeleton), falls back to
+    finding ANY non-zero embedding in the DB — better than nothing.
+
     Returns the proxy embedding or None if no good match exists.
     """
     if not source.topics:
+        # Fallback: any embedding is better than none. Pick the most
+        # popular repo with a real embedding.
+        from sqlalchemy import text
+
+        rows = await session.execute(
+            text(
+                """
+                SELECT id, embedding
+                FROM mvp_repos
+                WHERE embedding IS NOT NULL
+                ORDER BY stars DESC
+                LIMIT 5
+                """
+            ),
+        )
+        for row in rows:
+            emb_raw = row.embedding
+            if isinstance(emb_raw, list) and any(v != 0.0 for v in emb_raw[:3]):
+                logger.info("fallback proxy: no topics, using popular repo %d", row.id)
+                return [float(x) for x in emb_raw]
         return None
 
     import math as _math
@@ -235,6 +258,24 @@ async def _find_proxy_embedding(session: Any, source: Repo) -> list[float] | Non
 async def _find_desc_proxy_embedding(session: Any, source: Repo) -> list[float] | None:
     """Same as _find_proxy_embedding but for description_embedding column."""
     if not source.topics:
+        from sqlalchemy import text
+
+        rows = await session.execute(
+            text(
+                """
+                SELECT id, description_embedding
+                FROM mvp_repos
+                WHERE description_embedding IS NOT NULL
+                ORDER BY stars DESC
+                LIMIT 5
+                """
+            ),
+        )
+        for row in rows:
+            desc_raw = row.description_embedding
+            if isinstance(desc_raw, list) and any(v != 0.0 for v in desc_raw[:3]):
+                logger.info("fallback desc proxy: no topics, using popular repo %d", row.id)
+                return [float(x) for x in desc_raw]
         return None
 
     import math as _math
@@ -470,6 +511,24 @@ async def recommend(
                                     full_name, len(keywords))
             except Exception as exc:
                 logger.warning("  keyword extraction failed for %s: %s", full_name, exc)
+
+                # When GitHub is rate-limited, we can't fetch the README.
+                # But we CAN still use the source's description (from
+                # quick_save/fetch_all) to create a real embedding.
+                # This is far better than falling all the way back to proxy.
+                desc_text = source.description or ""
+                if desc_text and desc_text.strip():
+                    try:
+                        query_emb = await embed_text(desc_text.strip())
+                        if is_real_vector(query_emb):
+                            source = source.model_copy(update={
+                                "embedding": query_emb,
+                                "description_embedding": query_emb,
+                            })
+                            embed_status = {"desc_emb": "desc-only", "readme_emb": "desc-only"}
+                            logger.info("  description-only embedding for %s (GitHub rate-limited)", full_name)
+                    except Exception as exc2:
+                        logger.warning("  description embed also failed for %s: %s", full_name, exc2)
 
             # ── Fallback to proxy if keyword extraction failed ──────────
             if not is_real_vector(source.description_embedding) and not is_real_vector(source.embedding):

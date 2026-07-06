@@ -106,6 +106,13 @@ class MoreLikeTheseRequest(BaseModel):
     tags: str | None = Field(None, description="Comma-separated tag filter")
 
 
+class SearchResponse(BaseModel):
+    query: str
+    repos: list[ScoredRepoOut]
+    mode: str  # "hybrid", "fulltext", or "keyword"
+    total: int
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     version: str = "0.1.0"
@@ -440,6 +447,44 @@ async def more_like(
         repos=[ScoredRepoOut(**{k: v for k, v in r.model_dump().items() if k != "dependencies"}) for r in rec.repos],
         embed_status=getattr(rec, "embed_status", {}),
     )
+
+
+@app.get("/search", response_model=SearchResponse)
+async def search(
+    q: str = Query(..., description="Search query e.g. 'game development pixel'", min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+    mode: str = Query("hybrid", description="hybrid, fulltext, or keyword"),
+    min_stars: int = Query(0, ge=0),
+) -> SearchResponse:
+    """Search repos by keywords using hybrid engine (FTS + semantic).
+
+    Three modes:
+      - 'hybrid': full-text relevance + semantic similarity
+      - 'fulltext': PostgreSQL ts_rank on search_vector
+      - 'keyword': fast GIN-indexed ARRAY overlap
+    """
+    from reporelay_mvp import data as mvp_data
+
+    session = await mvp_data.get_session()
+    try:
+        if mode == "keyword":
+            terms = [t.strip().lower() for t in q.split() if len(t.strip()) > 1]
+            repos = await mvp_data.search_keywords(session, query_terms=terms, limit=limit, min_stars=min_stars)
+            results = [ScoredRepoOut(id=r.id, full_name=r.full_name, description=r.description, language=r.language, topics=r.topics, stars=r.stars, score=0.0, features={}, shared_topics=[], shared_language=False) for r in repos]
+        elif mode == "fulltext":
+            items = await mvp_data.search_fulltext(session, query_text=q, limit=limit, min_stars=min_stars)
+            results = [ScoredRepoOut(id=r.id, full_name=r.full_name, description=r.description, language=r.language, topics=r.topics, stars=r.stars, score=round(sc,4), features={}, shared_topics=[], shared_language=False) for r, sc in items]
+        else:
+            from reporelay_mvp.embedding import embed_text as _e, embedding_mode as _em
+            qe = None
+            if _em() != "none":
+                try: qe = await _e(q)
+                except Exception: pass
+            items = await mvp_data.search_hybrid(session, query_text=q, query_embedding=qe, limit=limit, min_stars=min_stars)
+            results = [ScoredRepoOut(id=r.id, full_name=r.full_name, description=r.description, language=r.language, topics=r.topics, stars=r.stars, score=round(sc,4), features={}, shared_topics=[], shared_language=False) for r, sc in items]
+    finally:
+        await session.close()
+    return SearchResponse(query=q, repos=results[:limit], mode=mode, total=len(results))
 
 
 @app.get("/recommend", response_model=RecommendResponse)

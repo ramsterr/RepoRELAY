@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 EXPECTED_COLUMNS = (
     "id, owner, name, full_name, description, language, topics, stars, "
-    "dependencies, trending_score, embedding, description_embedding"
+    "dependencies, trending_score, embedding, description_embedding, keywords"
 )
 
 
@@ -60,6 +60,7 @@ def _row_to_repo(row: Any) -> Repo:
         trending_score=float(data.get("trending_score") or 0.0),
         embedding=_parse_embedding(embedding_raw) if embedding_raw is not None else None,
         description_embedding=_parse_embedding(desc_embedding_raw) if desc_embedding_raw is not None else None,
+        keywords=list(data.get("keywords") or []),
     )
 
 
@@ -253,6 +254,29 @@ async def list_repos_needing_embedding(session: AsyncSession, *, limit: int) -> 
             SELECT {EXPECTED_COLUMNS}
             FROM mvp_repos
             WHERE embedding IS NULL
+            ORDER BY stars DESC
+            LIMIT :limit
+            """
+        ),
+        {"limit": limit},
+    )
+    return [_row_to_repo(r) for r in rows]
+
+
+async def list_repos_needing_description_embedding(
+    session: AsyncSession, *, limit: int
+) -> list[Repo]:
+    """Return repos that have no description_embedding yet.
+
+    Sorted by stars DESC so the most important repos get embedded first.
+    Used by description-only embedding pass (fast — no GitHub API calls).
+    """
+    rows = await session.execute(
+        text(
+            f"""
+            SELECT {EXPECTED_COLUMNS}
+            FROM mvp_repos
+            WHERE description_embedding IS NULL
             ORDER BY stars DESC
             LIMIT :limit
             """
@@ -649,3 +673,200 @@ def _to_pgvector(vec: list[float]) -> str:
     if all(float(x) == 0.0 for x in vec):
         raise ValueError("embedding vector is all zeros — cannot compute cosine distance")
     return "[" + ",".join(cleaned) + "]"
+
+
+# ── Full-Text & Keyword Search ──────────────────────────────────────
+
+
+async def search_keywords(
+    session: AsyncSession,
+    *,
+    query_terms: list[str],
+    limit: int = 50,
+    min_stars: int = 0,
+) -> list[Repo]:
+    """Fast keyword search using GIN-indexed ARRAY overlap.
+
+    Uses PostgreSQL's GIN index on the keywords[] column for
+    sub-millisecond lookup. Finds repos whose extracted keywords
+    overlap with the query terms.
+
+    This is the fastest search path — pure index scan, no ranking.
+    For ranked results, use search_fulltext() instead.
+    """
+    if not query_terms:
+        return []
+
+    rows = await session.execute(
+        text(
+            f"""
+            SELECT {EXPECTED_COLUMNS}
+            FROM mvp_repos
+            WHERE keywords && :terms
+              AND stars >= :min_stars
+            ORDER BY stars DESC
+            LIMIT :limit
+            """
+        ),
+        {"terms": query_terms, "min_stars": min_stars, "limit": limit},
+    )
+    return [_row_to_repo(r) for r in rows]
+
+
+async def search_fulltext(
+    session: AsyncSession,
+    *,
+    query_text: str,
+    limit: int = 50,
+    min_stars: int = 0,
+) -> list[tuple[Repo, float]]:
+    """Ranked full-text search using PostgreSQL tsvector + ts_rank.
+
+    Converts the query to a tsquery, matches against the search_vector
+    column, and ranks by ts_rank (relevance). Handles multi-word queries
+    with AND semantics.
+
+    Returns (repo, relevance_score) tuples sorted by relevance.
+    """
+    if not query_text or not query_text.strip():
+        return []
+
+    # Convert query to tsquery format: "game development pixel" → "game & development & pixel"
+    terms = [t.strip() for t in query_text.split() if t.strip() and len(t.strip()) > 1]
+    if not terms:
+        return []
+    tsquery = " & ".join(terms)
+
+    rows = await session.execute(
+        text(
+            f"""
+            SELECT {EXPECTED_COLUMNS},
+                   ts_rank(search_vector, to_tsquery('english', :query)) AS relevance
+            FROM mvp_repos
+            WHERE search_vector @@ to_tsquery('english', :query)
+              AND stars >= :min_stars
+            ORDER BY relevance DESC
+            LIMIT :limit
+            """
+        ),
+        {"query": tsquery, "min_stars": min_stars, "limit": limit},
+    )
+    return [(_row_to_repo(r), float(r._mapping["relevance"])) for r in rows]
+
+
+async def search_hybrid(
+    session: AsyncSession,
+    *,
+    query_text: str,
+    query_embedding: list[float] | None = None,
+    limit: int = 50,
+    min_stars: int = 0,
+    fts_weight: float = 0.4,
+    semantic_weight: float = 0.6,
+) -> list[tuple[Repo, float]]:
+    """Hybrid search: full-text relevance + semantic similarity.
+
+    Combines PostgreSQL ts_rank (full-text relevance) with pgvector
+    cosine distance (semantic similarity) into a single weighted score.
+
+    If query_embedding is None (no semantic component), falls back to
+    pure full-text search.
+
+    Returns (repo, combined_score) tuples sorted by combined score.
+    """
+    if not query_text or not query_text.strip():
+        return []
+
+    terms = [t.strip() for t in query_text.split() if t.strip() and len(t.strip()) > 1]
+    if not terms:
+        return []
+    tsquery = " & ".join(terms)
+
+    if query_embedding and len(query_embedding) > 0 and any(v != 0.0 for v in query_embedding):
+        # Hybrid: FTS + semantic
+        pg_vector = _to_pgvector(query_embedding)
+        rows = await session.execute(
+            text(
+                f"""
+                SELECT {EXPECTED_COLUMNS},
+                       (:fts_w * ts_rank(search_vector, to_tsquery('english', :query))) +
+                       (:sem_w * (1.0 - (description_embedding <=> :embedding::vector))) AS combined_score
+                FROM mvp_repos
+                WHERE search_vector @@ to_tsquery('english', :query)
+                  AND description_embedding IS NOT NULL
+                  AND stars >= :min_stars
+                ORDER BY combined_score DESC
+                LIMIT :limit
+                """
+            ),
+            {
+                "query": tsquery,
+                "embedding": pg_vector.strip(),
+                "fts_w": fts_weight,
+                "sem_w": semantic_weight,
+                "min_stars": min_stars,
+                "limit": limit,
+            },
+        )
+    else:
+        # Pure FTS fallback
+        rows = await session.execute(
+            text(
+                f"""
+                SELECT {EXPECTED_COLUMNS},
+                       ts_rank(search_vector, to_tsquery('english', :query)) AS combined_score
+                FROM mvp_repos
+                WHERE search_vector @@ to_tsquery('english', :query)
+                  AND stars >= :min_stars
+                ORDER BY combined_score DESC
+                LIMIT :limit
+                """
+            ),
+            {"query": tsquery, "min_stars": min_stars, "limit": limit},
+        )
+
+    return [(_row_to_repo(r), float(r._mapping["combined_score"])) for r in rows]
+
+
+async def set_keywords(
+    session: AsyncSession,
+    *,
+    repo_id: int,
+    keywords: list[str],
+) -> None:
+    """Store extracted keywords and update the search_vector."""
+    search_text = " ".join(keywords)
+    await session.execute(
+        text(
+            """
+            UPDATE mvp_repos
+            SET keywords = :keywords,
+                search_vector = to_tsvector('english', :search_text)
+            WHERE id = :id
+            """
+        ),
+        {"id": repo_id, "keywords": keywords, "search_text": search_text},
+    )
+
+
+async def list_repos_needing_keywords(
+    session: AsyncSession,
+    *,
+    limit: int = 1000,
+) -> list[Repo]:
+    """Return repos that have descriptions but no keywords yet."""
+    rows = await session.execute(
+        text(
+            f"""
+            SELECT {EXPECTED_COLUMNS}
+            FROM mvp_repos
+            WHERE description IS NOT NULL
+              AND description != ''
+              AND (keywords IS NULL OR array_length(keywords, 1) IS NULL OR array_length(keywords, 1) = 0)
+            ORDER BY stars DESC
+            LIMIT :limit
+            """
+        ),
+        {"limit": limit},
+    )
+    return [_row_to_repo(r) for r in rows]

@@ -1,26 +1,16 @@
 """
 Bulk embed the top N repos by stars.
 
+Two modes:
+  - Full: fetch READMEs from GitHub + embed both README and description
+  - Description-only: embed stored descriptions only, no GitHub calls
+
 The seed phase stores metadata + topics from the search API but
-doesn't compute embeddings (the search payload doesn't carry the
-README). This pass fills the gap so pgvector ANN has actual
-vectors to work with.
+doesn't compute embeddings. This pass fills the gap so pgvector ANN
+has actual vectors to work with.
 
-The flow is batched for efficiency:
-  1. Fetch READMEs for N repos in parallel (GitHub API)
-  2. Extract descriptions (or use stored)
-  3. Send all (README + description) texts to the embedding API in
-     one batched call (Gemini supports up to 100 texts per call)
-  4. Persist vectors to DB
-
-This drops API call count from O(repos * 2) to O(repos / batch_size).
-For 11k repos at batch_size=100: 110 batched calls instead of 22k
-individual calls. At 60 RPM free tier, that's ~2 minutes instead of
-6 hours.
-
-Pacing: defaults to concurrency=4 for the GitHub readme fetch step.
-The actual embedding API call is batched so it's not affected by
-the concurrency setting.
+For Gemini paid tier (1500 RPM), batching 96 texts per call means
+50k repos finish in ~520 batched calls (~20 min).
 """
 from __future__ import annotations
 
@@ -44,6 +34,7 @@ from reporelay_mvp.embedding import (
     embedding_mode,
 )
 from reporelay_mvp.github import _auth_client, fetch_readme
+from reporelay_mvp.keyword_extractor import extract_keywords_from_repo
 from reporelay_mvp.purpose import get_effective_description
 from reporelay_mvp.settings import get_mvp_settings
 
@@ -54,9 +45,9 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
 try:
     from google.api_core.exceptions import (
-        TooManyRequests,
-        ServiceUnavailable,
         InternalServerError,
+        ServiceUnavailable,
+        TooManyRequests,
     )
     _RETRYABLE_EXCEPTIONS = (
         TooManyRequests,
@@ -68,8 +59,12 @@ except ImportError:
     pass
 try:
     from voyageai.error import (
-        RateLimitError as VoyageRateLimitError,
         APIConnectionError,
+    )
+    from voyageai.error import (
+        RateLimitError as VoyageRateLimitError,
+    )
+    from voyageai.error import (
         ServiceUnavailableError as VoyageServiceUnavailable,
     )
     _RETRYABLE_EXCEPTIONS = (
@@ -195,26 +190,36 @@ async def _process_repo(
     else:
         effective_desc = None
 
-    return (repo.id, readme[:8000] if readme else None, effective_desc)
+    # Extract keywords from description + README
+    keywords: list[str] = []
+    try:
+        keywords = extract_keywords_from_repo(repo.description, readme)
+    except Exception as exc:
+        logger.debug("keyword extraction failed for %s/%s: %s", repo.owner, repo.name, exc)
+
+    return (repo.id, readme[:8000] if readme else None, effective_desc, keywords)
 
 
 async def embed_top(
     *,
-    limit: int = 1000,
-    concurrency: int = 4,
-    batch_size: int = 100,
-    skip_readme: bool = False,
+    limit: int = 7000,
+    concurrency: int = 8,
+    batch_size: int = 96,
+    description_only: bool = True,
 ) -> dict[str, int]:
     """
     Embed the top `limit` repos (by stars) that don't yet have an embedding.
 
     Batches multiple texts per API call for efficiency. For Gemini
-    free tier (~60 RPM), batching 100 texts per call means 11k repos
-    finish in ~2-3 minutes instead of 6 hours.
+    paid tier (1500 RPM), batching 96 texts per call means 50k repos
+    finish in ~520 batched calls (~20 min total).
 
-    If `skip_readme=True`, only embed descriptions (no GitHub API
-    calls). Useful when GitHub rate limit is exhausted but you want
-    to get the most important signal (description_cosine_sim) done.
+    If `description_only=True` (default), only embed descriptions
+    (no GitHub API calls). Uses stored description text from the DB.
+    This is the fast path — no rate limit concerns.
+
+    If `description_only=False`, also fetches READMEs from GitHub
+    and embeds both README + description (uses GitHub API rate limit).
 
     Returns a stats dict with attempted / succeeded / failed counts.
     """
@@ -222,35 +227,40 @@ async def embed_top(
     session = await data.get_session()
 
     try:
-        repos = await data.list_repos_needing_embedding(session, limit=limit)
+        if description_only:
+            repos = await data.list_repos_needing_description_embedding(
+                session, limit=limit
+            )
+        else:
+            repos = await data.list_repos_needing_embedding(session, limit=limit)
+
         if not repos:
             logger.info("no repos need embedding")
             return {"attempted": 0, "succeeded": 0, "failed": 0}
 
         mode = embedding_mode()
         logger.info(
-            "embedding %d repos (concurrency=%d, batch_size=%d, mode=%s, skip_readme=%s)",
-            len(repos), concurrency, batch_size, mode, skip_readme,
+            "embedding %d repos (concurrency=%d, batch_size=%d, mode=%s, description_only=%s)",
+            len(repos), concurrency, batch_size, mode, description_only,
         )
 
         succeeded = 0
         failed = 0
         sem = asyncio.Semaphore(concurrency)
-        batch_inputs: list[tuple[int, str | None, str | None]] = []
 
-        # Phase 1: fetch READMEs in parallel and prepare texts
-        if skip_readme:
-            # Skip GitHub entirely. Use stored description only.
+        # ── Phase 1: prepare texts ──────────────────────────────────
+        batch_inputs: list[tuple[int, str | None, str | None, list[str]]] = []
+
+        if description_only:
             for repo in repos:
                 desc = repo.description if repo.description else None
                 if not desc or not desc.strip():
                     continue
-                # Filter out generic/filler descriptions
                 from reporelay_mvp.purpose import is_good_description
 
                 if not is_good_description(desc):
                     continue
-                batch_inputs.append((repo.id, None, desc))
+                batch_inputs.append((repo.id, None, desc, []))
         else:
             async with _auth_client(settings.github_token) as client:
 
@@ -263,7 +273,6 @@ async def embed_top(
                     return_exceptions=True,
                 )
 
-            # Collect (repo_id, readme, description) tuples, skip None/error
             for result in fetched_results:
                 if isinstance(result, Exception):
                     failed += 1
@@ -273,15 +282,13 @@ async def embed_top(
                 batch_inputs.append(result)
 
         if not batch_inputs:
-            logger.info("no repos with usable READMEs")
+            logger.info("no repos with usable texts")
             return {"attempted": len(repos), "succeeded": 0, "failed": failed}
 
-        # Phase 2: batch embed via the API
-        # We send 2 texts per repo: (readme, description)
-        # All in one big batch up to batch_size * 2
+        # ── Phase 2: batch embed via Gemini API ──────────────────────
         all_texts: list[str] = []
         text_meta: list[tuple[int, str]] = []  # (repo_id, "readme"|"desc")
-        for repo_id, readme, desc in batch_inputs:
+        for repo_id, readme, desc, _keywords in batch_inputs:
             if readme and readme.strip():
                 all_texts.append(readme)
                 text_meta.append((repo_id, "readme"))
@@ -289,9 +296,7 @@ async def embed_top(
                 all_texts.append(desc)
                 text_meta.append((repo_id, "desc"))
 
-        # Process in chunks — embed AND persist each chunk immediately.
-        # Keeps the Neon connection alive and makes progress visible.
-        chunk_size = batch_size * 2
+        chunk_size = batch_size
         total_chunks = (len(all_texts) + chunk_size - 1) // chunk_size
 
         for i in range(0, len(all_texts), chunk_size):
@@ -299,34 +304,36 @@ async def embed_top(
             chunk_texts = all_texts[i : i + chunk_size]
             chunk_meta = text_meta[i : i + chunk_size]
             try:
-                if mode in ("gemini", "cohere"):
-                    if mode == "cohere":
-                        vectors = await _embed_batch_cohere(chunk_texts)
-                    else:
-                        vectors = await _embed_batch_gemini(
-                            chunk_texts, task_type="retrieval_document"
-                        )
-                else:
-                    vectors = []
-                    for text in chunk_texts:
-                        vectors.append(await _embed_with_retry(text))
+                vectors = await _embed_batch_gemini(
+                    chunk_texts, task_type="retrieval_document"
+                )
 
-                # Persist this chunk's vectors to DB immediately
-                for (repo_id, kind), vector in zip(chunk_meta, vectors):
+                for (repo_id, kind), vector in zip(chunk_meta, vectors, strict=True):
                     try:
                         if kind == "readme":
                             await _safe_set_embedding(session, repo_id, vector)
-                        else:  # desc
+                        else:
                             await _safe_set_description(session, repo_id, vector)
                     except Exception as exc:
                         logger.warning("DB write failed for repo %d %s: %s", repo_id, kind, exc)
                         continue
+
+                # Persist keywords for repos in this chunk
+                for repo_id, _readme, _desc, keywords in batch_inputs:
+                    if keywords:
+                        try:
+                            await data.set_keywords(session, repo_id=repo_id, keywords=keywords)
+                        except Exception:
+                            pass
+
                 await session.commit()
                 succeeded += len({repo_id for repo_id, _ in chunk_meta})
 
                 if chunk_num % 10 == 0 or chunk_num == total_chunks:
-                    logger.info("  embed progress: chunk %d/%d (%d repos done so far)",
-                                chunk_num, total_chunks, succeeded)
+                    logger.info(
+                        "  embed progress: chunk %d/%d (%d repos done so far)",
+                        chunk_num, total_chunks, succeeded,
+                    )
             except Exception as exc:
                 logger.warning("batch embed failed at chunk %d: %s", i, exc)
                 failed += len({repo_id for repo_id, _ in chunk_meta})

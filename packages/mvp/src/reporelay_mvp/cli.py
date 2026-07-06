@@ -30,7 +30,7 @@ from reporelay_mvp import recommend_random as explore_func
 from reporelay_mvp.embed_pass import embed_top
 from reporelay_mvp.github import save_repo
 from reporelay_mvp.seed import DEFAULT_LANGUAGES, seed_corpus
-from reporelay_mvp.seed_topics import DEFAULT_TOPICS
+from reporelay_mvp.seed_topics import DEFAULT_TOPICS, seed_topics_weighted
 from reporelay_mvp.seed_topics import seed_topics as seed_topics_fn
 from reporelay_mvp.settings import get_mvp_settings
 from reporelay_mvp.topic_inference import infer_topics_for_repo
@@ -203,8 +203,70 @@ def seed_topics(
     ),
     per_topic: int = typer.Option(200, help="repos per topic (max ~200 per search page × 2 pages)"),
     min_stars: int = typer.Option(20, help="minimum star count for search"),
+    weighted: bool = typer.Option(
+        False,
+        "--weighted",
+        help="Use weighted distribution from topics_config.py (500+ topics, 50k repos total)",
+    ),
+    category: str = typer.Option(
+        "",
+        "--category",
+        help="With --weighted: only seed topics from this category",
+    ),
+    total_limit: int = typer.Option(
+        0,
+        "--total-limit",
+        help="Cap total repos seeded (0 = unlimited). Safety valve.",
+    ),
 ) -> None:
-    """Seed repos by topic — broad software categories, not language-only."""
+    """Seed repos by topic — broad software categories, not language-only.
+
+    Without --weighted: uniform per_topic across default topics (~163 topics).
+    With --weighted: per-topic counts from topics_config.py (~500+ topics, ~50k repos).
+    """
+    _configure_logging()
+
+    if weighted:
+        from reporelay_mvp.topics_config import (
+            WEIGHTED_TOPICS,
+            get_category_names,
+            get_topics_for_category,
+        )
+
+        if category:
+            weighted_list = get_topics_for_category(category.strip())
+            if not weighted_list:
+                names = ", ".join(get_category_names())
+                console.print(f"[red]unknown category: {category!r}[/red]")
+                console.print(f"Available: {names}")
+                raise typer.Exit(code=1)
+            console.print(
+                f"[bold]seed-topics-weighted[/bold] — category={category}, "
+                f"{len(weighted_list)} topics, stars ≥ {min_stars}"
+            )
+        else:
+            weighted_list = list(WEIGHTED_TOPICS)
+            total = sum(c for c, _ in weighted_list)
+            console.print(
+                f"[bold]seed-topics-weighted[/bold] — {len(weighted_list)} topics, "
+                f"~{total} repos total, stars ≥ {min_stars}"
+            )
+
+        if total_limit:
+            console.print(f"  total_limit={total_limit}")
+        console.print()
+
+        total = asyncio.run(
+            seed_topics_weighted(
+                topics=weighted_list,
+                min_stars=min_stars,
+                total_limit=total_limit,
+            )
+        )
+        console.print(f"[bold green]done — {total} repos indexed[/bold green]")
+        return
+
+    # Uniform mode (existing behavior)
     topic_list = None
     if topics.strip():
         topic_list = [t.strip().lower() for t in topics.split(",") if t.strip()]
@@ -227,43 +289,40 @@ def seed_topics(
 
 @app.command()
 def embed(
-    limit: int = typer.Option(1000, help="how many top-by-stars repos to embed"),
-    concurrency: int = typer.Option(8, help="parallel readme fetches"),
-    batch_size: int = typer.Option(48, help="texts per batched API call (Cohere max=96, chunk=96)"),
-    skip_readme: bool = typer.Option(
-        False,
-        "--skip-readme",
-        help="skip GitHub readme fetches, embed descriptions only "
-        "(useful when GitHub rate limit is exhausted)",
+    limit: int = typer.Option(7000, help="how many top-by-stars repos to embed"),
+    concurrency: int = typer.Option(8, help="parallel readme fetches (unused in desc-only mode)"),
+    batch_size: int = typer.Option(96, help="texts per batched Gemini API call (max=96)"),
+    description_only: bool = typer.Option(
+        True,
+        "--description-only/--with-readme",
+        help="Embed descriptions only (default, no GitHub API calls). "
+        "--with-readme fetches READMEs from GitHub too.",
     ),
 ) -> None:
     """
-    Compute and store README embeddings for repos indexed from
-    search but not yet embedded. Unlocks pgvector ANN.
+    Compute and store embeddings for repos indexed from search but not
+    yet embedded. Unlocks pgvector ANN semantic search.
 
-    For Gemini (gemini-embedding-001), batched API calls are used:
-    batch_size texts are sent per request. For 11k repos at
-    batch_size=100, this is ~110 batched calls (~3 min at 60 RPM
-    free tier) instead of 22k individual calls (~6 hours).
+    Defaults to description-only mode — embeds the stored description
+    without calling GitHub. Uses Gemini paid tier (1500 RPM) with
+    batched API calls (96 texts/request).
 
-    Other providers fall back to one-at-a-time embedding.
-
-    Use --skip-readme to skip GitHub API calls and embed only
-    stored descriptions. Useful when you've hit the GitHub rate
-    limit (5000 req/hr) but still want to update the most important
-    signal (description_cosine_sim has 0.27 weight).
+    With --with-readme, fetches READMEs from GitHub and embeds both
+    README + description (uses GitHub API rate limit).
     """
     _configure_logging()
+    mode_label = "description-only" if description_only else "readme+description"
     console.print(
-        f"[bold]embedding top {limit} repos (concurrency={concurrency}, "
-        f"batch_size={batch_size}, skip_readme={skip_readme})[/bold]"
-    )
-    console.print(
-        "[dim]first run downloads the embedding model (~80MB, ~11s); subsequent runs are fast[/dim]"
+        f"[bold]embedding top {limit} repos ({mode_label}, batch_size={batch_size})[/bold]"
     )
 
     result = asyncio.run(
-        embed_top(limit=limit, concurrency=concurrency, batch_size=batch_size, skip_readme=skip_readme)
+        embed_top(
+            limit=limit,
+            concurrency=concurrency,
+            batch_size=batch_size,
+            description_only=description_only,
+        )
     )
     if result["attempted"] == 0:
         console.print("[yellow]no repos need embedding[/yellow]")
@@ -408,7 +467,7 @@ def trending(
         }
         for r in repos
     ]
-    rows = [{**r, "stars_period": getattr(r_obj, star_field, r["stars_period"])} for r, r_obj in zip(rows, repos)]
+    rows = [{**r, "stars_period": getattr(r_obj, star_field, r["stars_period"])} for r, r_obj in zip(rows, repos, strict=True)]
 
     async def apply() -> int:
         session = await data.get_session()
@@ -499,6 +558,87 @@ def infer_topics_cmd(
     updated, total = asyncio.run(run())
     console.print(
         f"[bold green]done — {updated}/{total} repos got new topics[/bold green]"
+    )
+
+
+@app.command("extract-keywords")
+def extract_keywords_cmd(
+    limit: int = typer.Option(5000, help="max repos to process"),
+    concurrency: int = typer.Option(4, help="parallel processing"),
+) -> None:
+    """Extract search keywords from repo descriptions + READMEs.
+
+    Extracts domain-specific technical keywords and stores them in the
+    keywords[] column for fast search via GIN index. Also populates
+    the search_vector tsvector column for full-text search.
+
+    Keywords come from:
+      - Description (higher weight) — "open-source pixel generation"
+      - README (lower weight) — the first 5000 chars
+
+    After extraction, you can search via:
+      GET /search?q=game+development+pixel&mode=hybrid
+    """
+    _configure_logging()
+
+    from reporelay_mvp import data
+    from reporelay_mvp.keyword_extractor import extract_keywords_from_repo
+    from reporelay_mvp.github import _auth_client, fetch_readme
+    from reporelay_mvp.settings import get_mvp_settings
+
+    async def run() -> tuple[int, int]:
+        session = await data.get_session()
+        try:
+            repos = await data.list_repos_needing_keywords(session, limit=limit)
+        finally:
+            await session.close()
+
+        if not repos:
+            console.print("[yellow]no repos need keyword extraction[/yellow]")
+            return 0, 0
+
+        console.print(f"[bold]extracting keywords for {len(repos)} repos[/bold]")
+
+        settings = get_mvp_settings()
+        sem = asyncio.Semaphore(concurrency)
+        updated = 0
+
+        async def process_one(repo: Any) -> bool:
+            async with sem:
+                readme: str | None = None
+                try:
+                    async with _auth_client(settings.github_token) as client:
+                        fetched = await fetch_readme(client, repo.owner, repo.name)
+                        if fetched and fetched.strip():
+                            readme = fetched
+                except Exception:
+                    pass
+
+                keywords = extract_keywords_from_repo(repo.description, readme)
+                if not keywords:
+                    return False
+
+                session = await data.get_session()
+                try:
+                    await data.set_keywords(session, repo_id=repo.id, keywords=keywords)
+                    await session.commit()
+                finally:
+                    await session.close()
+                return True
+
+        tasks = [process_one(r) for r in repos]
+        for i, ok in enumerate(await asyncio.gather(*tasks)):
+            if ok:
+                updated += 1
+            if (i + 1) % 100 == 0 or (i + 1) == len(repos):
+                console.print(f"  progress: {i+1}/{len(repos)}")
+                await asyncio.sleep(0.1)
+
+        return updated, len(repos)
+
+    updated, total = asyncio.run(run())
+    console.print(
+        f"[bold green]done — {updated}/{total} repos got keywords extracted[/bold green]"
     )
 
 

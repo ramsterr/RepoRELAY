@@ -25,6 +25,7 @@ class Repo(BaseModel):
     dependencies: list[str] = Field(default_factory=list)
     embedding: list[float] | None = None
     description_embedding: list[float] | None = None
+    keywords: list[str] = Field(default_factory=list)
     trending_score: float = 0.0
 
 

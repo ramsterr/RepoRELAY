@@ -466,10 +466,6 @@ import "../styles/global.css";
             dark: ["#001a33", "#003d66", "#006994", "#00a8e8", "#a5f3fc"],
             light: ["#ecfeff", "#a5f3fc", "#22d3ee", "#0891b2", "#164e63"],
             accent: "#00a8e8",
-            animation: {
-              css: "@keyframes rr-rise{0%{transform:translateY(30px);opacity:0}25%{opacity:0.9}100%{transform:translateY(-140px);opacity:0}}.rr-bubble{animation:rr-rise 4s ease-in infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
-              cellClass: function(v,x,y,cols,rows){return v>0.8?{"class":"rr-bubble",style:"animation-delay:"+(((x*2+y*3)%15)*0.27)+"s"}:null;}
-            },
             fn: function (c, rand, cols, rows) {
               var bubbles = makeSeeds(rand, cols, rows, 18);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -519,10 +515,6 @@ import "../styles/global.css";
             dark: ["#2a0a1a", "#5c1e3a", "#db2777", "#f9a8d4", "#fce7f3"],
             light: ["#fdf2f8", "#fbcfe8", "#f472b6", "#db2777", "#9d174d"],
             accent: "#f9a8d4",
-            animation: {
-              css: "@keyframes rr-petal{0%{transform:translate(0,0) rotate(0deg);opacity:0.9}100%{transform:translate(70px,200px) rotate(60deg);opacity:0}}.rr-petal{animation:rr-petal 7s linear infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
-              cellClass: function(v,x,y,cols,rows){return v>0.75?{"class":"rr-petal",style:"animation-delay:"+(((x*5+y*2)%25)*0.28)+"s"}:null;}
-            },
             fn: function (c, rand, cols, rows) {
               var petals = makeSeeds(rand, cols, rows, 35);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -543,19 +535,33 @@ import "../styles/global.css";
             dark: ["#281306", "#7c2d12", "#c2410c", "#fdba74", "#ffedd5"],
             light: ["#fff7ed", "#fed7aa", "#fb923c", "#ea580c", "#9a3412"],
             accent: "#fdba74",
-            fn: function (c, rand, cols, rows) {
-              var cactusX = floor(cols * 0.72);
+fn: function (c, rand, cols, rows) {
+              var sunX = floor(cols * 0.75), sunY = floor(rows * 0.22), sunR = 3;
+              var cacti = [];
+              for (var i = 0; i < 3; i++) cacti.push({ x: rand() * cols, h: 6 + floor(rand() * 8) });
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
                 var nx = x / cols, ny = y / rows;
-                var dune = sin(nx * 6 + 1.5) * 0.12 + sin(nx * 3 + 0.5) * 0.18;
-                var ground = rows - floor(rows * (0.35 + dune));
-                var v = 0.08 + ny * 0.15;
-                if (y > ground) {
-                  v = 0.4 + ((y - ground) / (rows - ground)) * 0.35;
+                var v = 0.06 + ny * 0.12;
+                var sdx = x - sunX, sdy = y - sunY;
+                if (sdx * sdx + sdy * sdy < sunR * sunR) v = 0.92;
+                var dune1 = sin(nx * 5 + 1) * 0.08;
+                var dune2 = sin(nx * 8 + 2) * 0.06;
+                var groundY = rows * (0.42 + dune1 + dune2);
+                if (y >= groundY) {
+                  var sand = 0.45 + ((y - groundY) / (rows - groundY)) * 0.3;
+                  var ridge = sin(nx * 12) * 0.04;
+                  if (y > groundY + ridge * rows) sand += 0.08;
+                  v = sand;
+                  for (var i = 0; i < cacti.length; i++) {
+                    var cac = cacti[i];
+                    var cy = rows - 1;
+                    var ch = cac.h;
+                    if (x >= cac.x - 1 && x <= cac.x + 1 && y > cy - ch && y <= cy) v = 0.18;
+                    var armY = cy - ch * 0.55;
+                    if (y >= armY - 1 && y <= armY + 1 && x >= cac.x - 3 && x <= cac.x - 1) v = 0.18;
+                    if (y >= armY && y <= cy - ch * 0.3 && x === floor(cac.x - 3)) v = 0.18;
+                  }
                 }
-                // cactus
-                if (x >= cactusX - 1 && x <= cactusX + 1 && y > ground - 8 && y < ground) v = 0.15;
-                if (x === cactusX && y > ground - 12 && y < ground - 2) v = 0.12;
                 this.push(clamp(v, 0, 1));
               }
             }
@@ -595,14 +601,18 @@ import "../styles/global.css";
             light: ["#ecfeff", "#a5f3fc", "#22d3ee", "#0891b2", "#164e63"],
             accent: "#22d3ee",
             fn: function (c, rand, cols, rows) {
-              var crystals = makeSeeds(rand, cols, rows, 24);
+              var flakes = makeSeeds(rand, cols, rows, 22);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var v = 0.08 + (y / rows) * 0.25;
-                for (var i = 0; i < crystals.length; i++) {
-                  var cr = crystals[i];
-                  var dx = abs(x - cr.x), dy = abs(y - cr.y);
-                  if (dx + dy < 3 + (i % 3)) {
-                    v = 0.65 + (3 - dx - dy) * 0.1;
+                var nx = x / cols, ny = y / rows;
+                var v = 0.05 + ny * 0.15 + sin(nx * 3 + ny * 2) * 0.04;
+                for (var i = 0; i < flakes.length; i++) {
+                  var f = flakes[i];
+                  var dx = abs(x - f.x), dy = abs(y - f.y);
+                  var size = 1.5 + (i % 3);
+                  var onArm = (dx < 0.8 || dy < 0.8 || abs(dx - dy) < 0.8);
+                  var dist = max(dx, dy);
+                  if (onArm && dist <= size) {
+                    v = 0.94 - dist * 0.14;
                   }
                 }
                 this.push(clamp(v, 0, 1));
@@ -616,12 +626,24 @@ import "../styles/global.css";
             dark: ["#2a0a1a", "#86198f", "#d946ef", "#f0abfc", "#fae8ff"],
             light: ["#fdf4ff", "#f5d0fe", "#e879f9", "#c026d3", "#701a75"],
             accent: "#f0abfc",
-            fn: function (c, rand, cols, rows) {
+fn: function (c, rand, cols, rows) {
+              var candies = makeSeeds(rand, cols, rows, 16);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var stripe = (floor(x / 3) + floor(y / 3)) % 2 === 0 ? 0.35 : 0.15;
-                var candy = ((x % 7 > 1 && x % 7 < 5) && (y % 7 > 1 && y % 7 < 5)) ? 0.75 : 0;
-                var sprinkle = rand() > 0.97 ? 0.95 : 0;
-                this.push(clamp(max(stripe, candy, sprinkle), 0, 1));
+                var stripe = (floor((x + y) / 3) % 2 === 0) ? 0.28 : 0.12;
+                var v = stripe;
+                for (var i = 0; i < candies.length; i++) {
+                  var cd = candies[i];
+                  var dx = abs(x - cd.x), dy = abs(y - cd.y);
+                  var r = 2.5;
+                  if (dx + dy < r) {
+                    v = 0.82;
+                    if ((floor(dx) + floor(dy)) % 2 === 0) v = 0.55;
+                    if (dx === 0 && dy > r * 0.4 && dy < r + 2) v = 0.35;
+                  }
+                }
+                var sprinkle = rand() > 0.985 ? 0.95 : 0;
+                v = max(v, sprinkle);
+                this.push(clamp(v, 0, 1));
               }
             }
           },
@@ -636,19 +658,23 @@ import "../styles/global.css";
               css: "@keyframes rr-gridpulse{0%,100%{opacity:0.4}50%{opacity:1}}.rr-grid{animation:rr-gridpulse 1.8s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
               cellClass: function(v,x,y,cols,rows){return v>0.75?{"class":"rr-grid",style:"animation-delay:"+(((x+y)%6)*0.3)+"s"}:null;}
             },
-            fn: function (c, rand, cols, rows) {
-              var horizon = floor(rows * 0.55);
+fn: function (c, rand, cols, rows) {
+              var horizon = floor(rows * 0.5);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var v = 0.04;
-                // perspective grid
+                var v = 0.03;
                 if (y > horizon) {
                   var rowUnit = (y - horizon) / (rows - horizon);
-                  var gx = (x % max(2, floor(20 * rowUnit))) === 0 ? 0.6 : 0;
-                  var gy = (y % max(2, floor(6 * rowUnit))) === 0 ? 0.7 : 0;
-                  v = max(gx, gy, 0.12 + rowUnit * 0.15);
+                  var perspective = rowUnit * rowUnit;
+                  var centerX = cols / 2;
+                  var angle = atan2(y - horizon, x - centerX);
+                  var line = abs(sin(angle * 12)) < 0.08 + perspective * 0.1 ? 0.75 : 0;
+                  var scan = (y % max(2, floor(4 * (1 - perspective)))) === 0 ? 0.6 : 0;
+                  var glow = (y - horizon < 3) ? 0.5 : 0;
+                  v = max(line, scan, glow, 0.1 + perspective * 0.25);
                 } else {
-                  // skyline
-                  if (rand() > 0.985) v = 0.9;
+                  var b = floor((x * 7 + y * 13) % 17);
+                  if (y > horizon - b && rand() > 0.3) v = 0.35;
+                  if (rand() > 0.992) v = 0.9;
                 }
                 this.push(clamp(v, 0, 1));
               }
@@ -682,10 +708,6 @@ import "../styles/global.css";
             dark: ["#0f172a", "#1e293b", "#334155", "#60a5fa", "#dbeafe"],
             light: ["#f8fafc", "#cbd5e1", "#94a3b8", "#3b82f6", "#1e3a8a"],
             accent: "#60a5fa",
-            animation: {
-              css: "@keyframes rr-drop{0%{transform:translateY(-30px);opacity:0}20%{opacity:1}100%{transform:translateY(140px);opacity:0}}.rr-drop{animation:rr-drop 0.9s linear infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
-              cellClass: function(v,x,y,cols,rows){return v>0.75?{"class":"rr-drop",style:"animation-delay:"+(((x*7+y*3)%11)*0.1)+"s"}:null;}
-            },
             fn: function (c, rand, cols, rows) {
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
                 var v = 0.08 + (y / rows) * 0.18;
@@ -728,20 +750,25 @@ import "../styles/global.css";
             dark: ["#0f1f14", "#1a4028", "#b91c1c", "#f87171", "#fecaca"],
             light: ["#f0fdf4", "#bbf7d0", "#fca5a5", "#dc2626", "#7f1d1d"],
             accent: "#f87171",
-            fn: function (c, rand, cols, rows) {
+fn: function (c, rand, cols, rows) {
               var shrooms = [];
-              for (var i = 0; i < 8; i++) shrooms.push({ x: rand() * cols, y: rows * 0.55 + rand() * rows * 0.4 });
+              for (var i = 0; i < 6; i++) shrooms.push({ x: rand() * cols, s: 0.7 + rand() * 0.6 });
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var v = 0.1 + (y / rows) * 0.25;
+                var ny = y / rows;
+                var v = 0.08 + ny * 0.2;
+                if (ny > 0.55 && (x + y) % 5 === 0) v = 0.15;
                 for (var i = 0; i < shrooms.length; i++) {
                   var s = shrooms[i];
-                  var dx = abs(x - s.x), dy = y - s.y;
-                  // stem
-                  if (dx < 1 && dy > -4 && dy < 0) v = 0.55;
-                  // cap
-                  if (dy >= -7 && dy <= -3 && dx < 4 - abs(dy + 5) * 0.8) v = 0.85;
-                  // spots
-                  if (dy >= -6 && dy <= -4 && dx % 3 === 0) v = 0.3;
+                  var scale = s.s;
+                  var stemH = floor(5 * scale), capW = floor(4 * scale);
+                  var ground = rows - 1;
+                  var sx = floor(s.x);
+                  if (x >= sx - 1 && x <= sx + 1 && y > ground - stemH && y <= ground) v = 0.55;
+                  var capY = ground - stemH;
+                  var dx = abs(x - sx);
+                  var capTop = capY - floor(3 * scale);
+                  if (y >= capTop && y <= capY && dx <= capW - (capY - y) * 0.6) v = 0.85;
+                  if (y >= capTop + 1 && y <= capY - 1 && dx % max(2, floor(2 * scale)) === 0 && dx < capW - 1) v = 0.3;
                 }
                 this.push(clamp(v, 0, 1));
               }
@@ -754,19 +781,28 @@ import "../styles/global.css";
             dark: ["#0c4a6e", "#075985", "#fde047", "#facc15", "#fef9c3"],
             light: ["#ecfeff", "#7dd3fc", "#fde047", "#eab308", "#fefce8"],
             accent: "#fde047",
-            fn: function (c, rand, cols, rows) {
-              var waterY = floor(rows * 0.58);
-              var sunX = floor(cols * 0.78), sunY = floor(rows * 0.22), sunR = 4;
+fn: function (c, rand, cols, rows) {
+              var waterY = floor(rows * 0.52);
+              var sunX = floor(cols * 0.75), sunY = floor(rows * 0.18), sunR = 4;
+              var treeX = floor(cols * 0.22);
+              var beachY = floor(rows * 0.78);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
                 var v;
                 if (y < waterY) {
-                  v = 0.25 + (y / waterY) * 0.25;
+                  v = 0.18 + (y / waterY) * 0.18;
                   var dx = x - sunX, dy = y - sunY;
-                  if (dx * dx + dy * dy < sunR * sunR) v = 0.9;
+                  if (dx * dx + dy * dy < sunR * sunR) v = 0.92;
                 } else {
-                  v = 0.55 + ((y - waterY) / (rows - waterY)) * 0.25;
-                  // towel/umbrella
-                  if (x === floor(cols * 0.35) && y > waterY + 3 && y < waterY + 10) v = 0.15;
+                  var seaFrac = (y - waterY) / (rows - waterY);
+                  v = 0.35 + seaFrac * 0.2;
+                  var wave = sin(x * 0.15 + seaFrac * 5) > 0.6 ? 0.25 : 0;
+                  v += wave;
+                  if (seaFrac < 0.12) v += 0.15 * (1 - seaFrac / 0.12);
+                }
+                if (y > beachY) {
+                  v = 0.55 + ((y - beachY) / (rows - beachY)) * 0.25;
+                  if (x >= treeX - 1 && x <= treeX + 1 && y > beachY + 2 && y < beachY + 14) v = 0.18;
+                  if (y >= beachY - 2 && y <= beachY + 4 && abs(x - treeX) < 8 - abs(y - (beachY + 1)) * 1.2) v = 0.18;
                 }
                 this.push(clamp(v, 0, 1));
               }
@@ -808,19 +844,27 @@ import "../styles/global.css";
             dark: ["#1a1025", "#701a75", "#ec4899", "#fb7185", "#fecdd3"],
             light: ["#fff1f2", "#fecdd3", "#fb7185", "#e11d48", "#881337"],
             accent: "#fb7185",
-            fn: function (c, rand, cols, rows) {
+fn: function (c, rand, cols, rows) {
               var corals = [];
-              for (var i = 0; i < 7; i++) corals.push({ x: rand() * cols, h: rows * (0.25 + rand() * 0.35), branches: 3 + floor(rand() * 4) });
+              for (var i = 0; i < 8; i++) corals.push({ x: rand() * cols, h: rows * (0.2 + rand() * 0.35), w: 1 + rand() * 2 });
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var v = 0.1 + (y / rows) * 0.25;
+                var ny = y / rows;
+                var v = 0.08 + ny * 0.25;
+                if (ny > 0.8) v = 0.4 + (ny - 0.8) * 1.5;
                 for (var i = 0; i < corals.length; i++) {
                   var coral = corals[i];
-                  if (x >= coral.x - 1 && x <= coral.x + 1 && y > rows - coral.h) v = 0.5;
-                  for (var b = 0; b < coral.branches; b++) {
-                    var by = rows - coral.h + b * (coral.h / coral.branches);
-                    var bx = coral.x + (b % 2 === 0 ? -1 : 1) * (b + 1);
-                    var dx = abs(x - bx), dy = abs(y - by);
-                    if (dx + dy < 3) v = 0.85;
+                  var h = coral.h;
+                  var baseY = rows - 1;
+                  var stemX = floor(coral.x);
+                  if (x >= stemX - coral.w && x <= stemX + coral.w && y > baseY - h && y <= baseY) v = 0.55;
+                  var nBranches = floor(h / 4);
+                  for (var b = 0; b < nBranches; b++) {
+                    var by = baseY - h + b * (h / nBranches) + 2;
+                    var dir = b % 2 === 0 ? -1 : 1;
+                    var bx = stemX + dir * (1 + b * 0.8);
+                    var len = 2 + b * 0.6;
+                    var dx = x - bx, dy = y - by;
+                    if (dx * dx + dy * dy < len * len && dx * dir > 0) v = 0.82;
                   }
                 }
                 this.push(clamp(v, 0, 1));
@@ -834,22 +878,43 @@ import "../styles/global.css";
             dark: ["#0f172a", "#1e3a5f", "#78350f", "#b45309", "#fde68a"],
             light: ["#f8fafc", "#bfdbfe", "#d97706", "#92400e", "#451a03"],
             accent: "#d97706",
-            fn: function (c, rand, cols, rows) {
-              var cabinX = floor(cols * 0.35);
-              var cabinW = 8, cabinH = 7;
-              var groundY = floor(rows * 0.68);
+fn: function (c, rand, cols, rows) {
+              var cabinX = floor(cols * 0.4);
+              var groundY = floor(rows * 0.72);
+              var moonX = floor(cols * 0.82), moonY = floor(rows * 0.18), moonR = 3;
+              var trees = [];
+              for (var i = 0; i < 5; i++) trees.push({ x: rand() * cols, h: 8 + rand() * 10 });
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var v = 0.08 + (y / rows) * 0.18;
-                if (y >= groundY) v = 0.4 + ((y - groundY) / (rows - groundY)) * 0.25;
-                // cabin body
-                if (x >= cabinX && x < cabinX + cabinW && y >= groundY - cabinH && y < groundY) v = 0.35;
-                // roof
-                if (y >= groundY - cabinH - 3 && y < groundY - cabinH) {
-                  var roofW = cabinW + 2 + (groundY - cabinH - y) * 0.8;
-                  if (abs(x - (cabinX + cabinW / 2)) < roofW / 2) v = 0.2;
+                var ny = y / rows;
+                var v = 0.05 + ny * 0.12;
+                var dx = x - moonX, dy = y - moonY;
+                if (dx * dx + dy * dy < moonR * moonR) v = 0.9;
+                if (rand() > 0.99) v = 0.7;
+                if (y >= groundY) {
+                  v = 0.35 + ((y - groundY) / (rows - groundY)) * 0.25;
+                  for (var i = 0; i < trees.length; i++) {
+                    var t = trees[i];
+                    var tx = floor(t.x);
+                    var th = t.h;
+                    var ty = groundY;
+                    if (x >= tx - 1 && x <= tx + 1 && y > ty - th * 0.2 && y <= ty) v = 0.2;
+                    for (var lyr = 0; lyr < 3; lyr++) {
+                      var lyTop = ty - th * (0.2 + lyr * 0.25);
+                      var lyBot = ty - th * (lyr * 0.25);
+                      var lw = 4 - lyr;
+                      if (y >= lyTop && y <= lyBot && abs(x - tx) <= lw * (1 - (y - lyTop) / (lyBot - lyTop))) v = 0.15;
+                    }
+                  }
+                  var cw = 9, ch = 6;
+                  if (x >= cabinX && x < cabinX + cw && y >= groundY - ch && y < groundY) v = 0.32;
+                  if (y >= groundY - ch - 3 && y < groundY - ch) {
+                    var roofW = (cw / 2) + (groundY - ch - y);
+                    if (abs(x - (cabinX + cw / 2)) < roofW) v = 0.22;
+                  }
+                  if (x >= cabinX + 2 && x <= cabinX + 5 && y >= groundY - ch + 2 && y <= groundY - 1) v = 0.92;
+                  if (x >= cabinX + cw - 3 && x <= cabinX + cw - 1 && y >= groundY - ch + 1 && y < groundY) v = 0.25;
+                  if (x >= cabinX + 2 && x <= cabinX + 4 && y >= groundY - ch - 6 && y < groundY - ch - 3 && (x + y) % 3 === 0) v = 0.45;
                 }
-                // window light
-                if (x >= cabinX + 2 && x <= cabinX + 4 && y >= groundY - cabinH + 2 && y <= groundY - 2) v = 0.9;
                 this.push(clamp(v, 0, 1));
               }
             }
@@ -861,10 +926,6 @@ import "../styles/global.css";
             dark: ["#0f0518", "#4c1d95", "#ec4899", "#facc15", "#ffffff"],
             light: ["#faf5ff", "#ddd6fe", "#f472b6", "#eab308", "#71717a"],
             accent: "#ec4899",
-            animation: {
-              css: "@keyframes rr-pulse{0%,100%{opacity:0.6;transform:scale(0.92)}50%{opacity:1;transform:scale(1.08)}}.rr-disco{animation:rr-pulse 1.5s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
-              cellClass: function(v,x,y,cols,rows){return v>0.75?{"class":"rr-disco",style:"animation-delay:"+(((x+y)%5)*0.3)+"s"}:null;}
-            },
             fn: function (c, rand, cols, rows) {
               var cx = cols / 2, cy = rows / 3;
               var ballR = min(cols, rows) * 0.18;
@@ -965,14 +1026,52 @@ import "../styles/global.css";
           return parts.join('');
         }
 
+        function getRecentThemes() {
+          try {
+            var raw = localStorage.getItem("rr-art-history");
+            if (raw) {
+              var parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) return parsed;
+            }
+          } catch (e) {}
+          return [];
+        }
+
+        function saveRecentTheme(idx) {
+          try {
+            var history = getRecentThemes();
+            history.push(idx);
+            while (history.length > 8) history.shift();
+            localStorage.setItem("rr-art-history", JSON.stringify(history));
+          } catch (e) {}
+        }
+
+        function pickRandomTheme() {
+          var history = getRecentThemes();
+          var available = [];
+          for (var i = 0; i < THEMES.length; i++) {
+            if (history.indexOf(i) === -1) available.push(i);
+          }
+          if (available.length === 0) {
+            available = [];
+            for (var i = 0; i < THEMES.length; i++) available.push(i);
+          }
+          return available[floor(Math.random() * available.length)];
+        }
+
         function generate(patternIndex) {
           var old = document.getElementById("commit-grid");
           if (old) old.remove();
 
           var w = max(1, window.innerWidth);
           var h = max(1, window.innerHeight);
-          var pi = (patternIndex === undefined || patternIndex === null || patternIndex < 0)
-            ? floor(Math.random() * THEMES.length) : patternIndex;
+          var pi;
+          if (patternIndex === undefined || patternIndex === null || patternIndex < 0) {
+            pi = pickRandomTheme();
+            saveRecentTheme(pi);
+          } else {
+            pi = patternIndex;
+          }
           if (pi >= THEMES.length) pi = 0;
           currentArt = pi;
 

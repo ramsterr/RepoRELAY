@@ -15,14 +15,14 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   <p class="section-label">
     <span class="trending-icon" aria-hidden="true">▲</span>
     random picks
-    <button type="button" id="reroll-picks" class="btn btn-outline" style="font-size:0.75rem;padding:0.35rem 0.75rem;margin-left:0.5rem;text-transform:lowercase;">↻ reroll</button>
+    <button type="button" id="reroll-picks" class="btn btn-outline" style="font-size:0.75rem;padding:0.35rem 0.75rem;margin-left:0.5rem;text-transform:lowercase;">reroll</button>
   </p>
   <div class="random-picks-grid" id="random-picks">
     <div class="loading" style="grid-column: 1 / -1;">loading random repos…</div>
   </div>
 
   <div class="actions" style="margin-bottom: 2.75rem;">
-    <button class="btn btn-outline" id="roll-btn">random repo → recs</button>
+    <button class="btn btn-outline" id="roll-btn">random repo to recs</button>
     <a href="/" class="btn btn-outline" style="display:inline-block;">back to search</a>
   </div>
 

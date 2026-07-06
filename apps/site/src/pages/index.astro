@@ -127,7 +127,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         for (var i = 0; i < repos.length; i++) {
           html += '<a href="/repo?repo=' + encodeURIComponent(repos[i].full_name) + '">' + repos[i].full_name + '</a>';
         }
-        html += '<button type="button" class="btn btn-outline" id="shuffle-btn" onclick="return window.loadRandomRepos && window.loadRandomRepos()" style="font-size:0.75rem;padding:0.35rem 0.75rem;" aria-label="Shuffle suggestions">↻ shuffle</button>';
+          html += '<button type="button" class="btn btn-outline" id="shuffle-btn" onclick="return window.loadRandomRepos && window.loadRandomRepos()" style="font-size:0.75rem;padding:0.35rem 0.75rem;" aria-label="Shuffle suggestions">shuffle</button>';
         el.innerHTML = html;
       })
       .catch(function (e) {

@@ -504,17 +504,26 @@ async def fetch_filtered_pool(
 async def fetch_vector_neighbors(
     session: AsyncSession,
     *,
-    source_id: int,
+    source_embedding: list[float],
     exclude_id: int,
     limit: int,
 ) -> dict[int, tuple[Repo, float]]:
     """
-    pgvector ANN: nearest neighbors of the source repo's embedding,
-    excluding the source itself. The embedding is read from the source
-    row in the same query — no parameter binding needed for the vector.
+    pgvector ANN: nearest neighbors of an arbitrary source embedding,
+    excluding one repo by id.
+
+    The source embedding is passed in directly (not joined from the
+    mvp_repos table) so the caller can use a freshly-computed vector
+    without first having to persist it. This is critical for the
+    "paste a new GitHub URL" flow — we just computed the README vector
+    in-process, and we want to use it immediately to find similar repos
+    in the DB rather than waiting for the HNSW index to reflect a write.
 
     Returns a dict mapping repo_id -> (Repo, cosine_similarity).
+    Returns an empty dict if source_embedding is empty/zero.
     """
+    if not source_embedding or all(v == 0.0 for v in source_embedding):
+        return {}
     rows = await session.execute(
         text(
             """
@@ -523,18 +532,19 @@ async def fetch_vector_neighbors(
                 mvp_repos.full_name, mvp_repos.description,
                 mvp_repos.language, mvp_repos.topics, mvp_repos.stars,
                 mvp_repos.dependencies,
-                1 - (mvp_repos.embedding <=> src.embedding) AS cosine_sim
+                1 - (mvp_repos.embedding <=> CAST(:source_embedding AS vector)) AS cosine_sim
             FROM mvp_repos
-            CROSS JOIN mvp_repos AS src
-            WHERE src.id = :source_id
-              AND mvp_repos.id != :exclude_id
+            WHERE mvp_repos.id != :exclude_id
               AND mvp_repos.embedding IS NOT NULL
-              AND src.embedding IS NOT NULL
-            ORDER BY mvp_repos.embedding <=> src.embedding
+            ORDER BY mvp_repos.embedding <=> CAST(:source_embedding AS vector)
             LIMIT :limit
             """
         ),
-        {"source_id": source_id, "exclude_id": exclude_id, "limit": limit},
+        {
+            "source_embedding": _to_pgvector(source_embedding),
+            "exclude_id": exclude_id,
+            "limit": limit,
+        },
     )
     result: dict[int, tuple[Repo, float]] = {}
     for row in rows:
@@ -542,3 +552,13 @@ async def fetch_vector_neighbors(
         sim = float(row._mapping["cosine_sim"])
         result[repo.id] = (repo, sim)
     return result
+
+
+def _to_pgvector(vec: list[float]) -> str:
+    """Serialize a Python list[float] into the textual form pgvector accepts
+    in a query parameter (e.g. '[0.1,0.2,...]').
+
+    Using a parameter keeps the query plan stable and lets us use the
+    HNSW index. We cast in SQL via CAST(... AS vector).
+    """
+    return "[" + ",".join(repr(float(x)) for x in vec) + "]"

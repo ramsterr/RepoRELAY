@@ -48,12 +48,29 @@ async def generate_candidates(
         topics=source.topics,
         limit=pool_size,
     )
-    vector_pool = await data.fetch_vector_neighbors(
-        session,
-        source_id=source.id,
-        exclude_id=source.id,
-        limit=vector_k,
-    )
+
+    # Use the in-memory source.embedding (freshly computed by the
+    # caller). Falls back to a DB read only if the in-memory one is
+    # missing/zero — this happens when the source was loaded by a code
+    # path that didn't run the live embed (e.g. relevance feedback
+    # virtual source, or a cached Repo that hasn't been re-fetched).
+    source_emb = source.embedding
+    if source_emb is None or all(v == 0.0 for v in source_emb):
+        source_emb = await data.get_embedding(session, source.id) or source_emb
+
+    vector_pool: dict[int, tuple[Repo, float]] = {}
+    if source_emb and not all(v == 0.0 for v in source_emb):
+        vector_pool = await data.fetch_vector_neighbors(
+            session,
+            source_embedding=source_emb,
+            exclude_id=source.id,
+            limit=vector_k,
+        )
+    else:
+        logger.info(
+            "source %s has no real embedding — vector pool is empty (sql pool will dominate)",
+            source.full_name,
+        )
 
     merged: list[tuple[Repo, float]] = []
     seen: set[int] = set()

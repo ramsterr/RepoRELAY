@@ -53,6 +53,10 @@ class ScoredRecommendation(BaseModel):
     source_repo: str
     repos: list[ScoredRepo]
     from_cache: bool = False
+    embed_status: dict[str, str] = Field(
+        default_factory=dict,
+        description="Status of the source's embeddings: 'ok' (live), 'cached' (DB), or 'missing'.",
+    )
 
 
 @dataclass

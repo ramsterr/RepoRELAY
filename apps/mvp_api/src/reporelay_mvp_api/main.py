@@ -86,6 +86,10 @@ class RecommendResponse(BaseModel):
     source_repo: str
     repos: list[ScoredRepoOut]
     from_cache: bool = False
+    embed_status: dict[str, str] = Field(
+        default_factory=dict,
+        description="Status of source embeddings: 'ok' (live) or 'cached' (DB).",
+    )
 
 
 class MoreLikeTheseRequest(BaseModel):
@@ -427,6 +431,7 @@ async def more_like(
     return RecommendResponse(
         source_repo=rec.source_repo,
         repos=[ScoredRepoOut(**{k: v for k, v in r.model_dump().items() if k != "dependencies"}) for r in rec.repos],
+        embed_status=getattr(rec, "embed_status", {}),
     )
 
 
@@ -446,10 +451,21 @@ async def recommend(
     if tags:
         tag_list = [t.strip().lower() for t in tags.split(",") if t.strip()]
 
+    # Import here to avoid circular import at module load
+    from reporelay_mvp.recommend import EmbedError
+
     try:
         rec = await recommend_fn(repo, limit=limit, seed=seed, tags=tag_list)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except EmbedError as exc:
+        # 502 Bad Gateway — upstream (Gemini / GitHub) is the problem,
+        # not us. Tell the user clearly what failed.
+        logger.error("embed failed for %s: %s", repo, exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"could not embed source repo: {exc}",
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("recommend failed for %s", repo)
         raise HTTPException(status_code=500, detail="internal error") from exc
@@ -457,6 +473,7 @@ async def recommend(
     return RecommendResponse(
         source_repo=rec.source_repo,
         repos=[ScoredRepoOut(**{k: v for k, v in r.model_dump().items() if k != "dependencies"}) for r in rec.repos],
+        embed_status=getattr(rec, "embed_status", {}),
     )
 
 
@@ -476,4 +493,5 @@ async def explore(
     return RecommendResponse(
         source_repo=rec.source_repo,
         repos=[ScoredRepoOut(**{k: v for k, v in r.model_dump().items() if k != "dependencies"}) for r in rec.repos],
+        embed_status=getattr(rec, "embed_status", {}),
     )

@@ -55,7 +55,7 @@ def _auth_client(token: str) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         base_url=GITHUB_API,
         headers=_auth_headers(token),
-        timeout=httpx.Timeout(5.0, connect=3.0),
+        timeout=httpx.Timeout(15.0, connect=5.0),
     )
 
 
@@ -370,7 +370,13 @@ async def quick_save(owner: str, name: str) -> int:
             stars=stars,
             dependencies=[],
         )
-        await data.set_embedding(session, repo_id=repo_id, embedding=[0.0] * 512)
+        # Leave embedding columns NULL so:
+        # 1. `embedding IS NULL` cleanly identifies rows that need to be
+        #    embedded (see list_repos_needing_embedding, recommend flow)
+        # 2. fetch_vector_neighbors won't match a zero-vector source
+        #    (which breaks cosine distance)
+        # 3. It's obvious from a quick DB inspection whether a row has
+        #    been embedded yet.
         await session.commit()
     finally:
         await session.close()

@@ -310,19 +310,32 @@ async def recommend(
         source_needs_embed = not source_has_desc_emb or not source_has_readme_emb
 
         source_readme_tokens = None
+        embed_status: dict[str, str] = {
+            "desc_emb": "cached" if source_has_desc_emb else "missing",
+            "readme_emb": "cached" if source_has_readme_emb else "missing",
+        }
         if source_needs_embed:
             logger.info("repo %s has no real vectors — embedding live via Gemini", full_name)
-            source, source_readme_tokens, deps = await _embed_source_live(
+            source, source_readme_tokens, deps, embed_status = await _embed_source_live(
                 source, owner, name, session,
             )
             if deps:
                 source = source.model_copy(update={"dependencies": deps})
-            logger.info(
-                "live embedding complete for %s (desc=%s, readme=%s, tokens=%d)",
-                full_name,
-                "yes" if source.description_embedding and any(v != 0.0 for v in source.description_embedding) else "no",
-                "yes" if source.embedding and any(v != 0.0 for v in source.embedding) else "no",
-                len(source_readme_tokens) if source_readme_tokens else 0,
+
+        # Final safety check: if the source STILL has no real embedding
+        # at this point, fail loudly. Returning "random" results from a
+        # SQL-only pool is a worse UX than an explicit error.
+        if source.embedding is None or all(v == 0.0 for v in source.embedding):
+            raise EmbedError(
+                f"source repo {full_name} has no README embedding — "
+                "cannot run vector search against the corpus"
+            )
+        if source.description_embedding is None or all(
+            v == 0.0 for v in source.description_embedding
+        ):
+            raise EmbedError(
+                f"source repo {full_name} has no description embedding — "
+                "cannot run description similarity against the corpus"
             )
 
         candidates = await _expand_pool(session, source, seed=seed, tags=tags)
@@ -347,6 +360,7 @@ async def recommend(
 
         result = ScoredRecommendation(source_repo=full_name, repos=scored_repos)
         result.from_cache = False
+        result.embed_status = embed_status
         _rec_cache_set(cache_key, cache_now, result)
         return result
     finally:
@@ -358,13 +372,31 @@ async def _embed_source_live(
     owner: str,
     name: str,
     session: Any,
-) -> tuple[Repo, set[str] | None, list[str]]:
+) -> tuple[Repo, set[str] | None, list[str], dict[str, str]]:
     """Fetch README + embed description + embed README via live Gemini API.
 
     Stores vectors in DB so future visits are instant (no API call needed).
 
-    Returns (updated_source, readme_tokens, dependencies).
+    Strategy:
+      1. Fetch README + dependencies from GitHub. If this fails, raise
+         EmbedError — the caller can't recommend a repo it can't read.
+      2. Build an "effective description": prefer the GitHub description,
+         but if it's missing/short/filler, fall back to a purpose statement
+         extracted from the README. This is what we embed and store as
+         `description` for the recommendation signal.
+      3. Embed the effective description via Gemini → description_embedding.
+      4. Embed the first 8000 chars of the README via Gemini → embedding.
+      5. Persist both vectors + the new description in one transaction.
+
+    If either embedding call fails, we raise EmbedError. The caller
+    (recommend()) will surface this to the user instead of returning
+    results that look like noise.
+
+    Returns (updated_source, readme_tokens, dependencies, status).
+    Status keys: "desc_emb", "readme_emb", "effective_description".
     """
+    from reporelay_mvp.purpose import get_effective_description
+
     settings = get_mvp_settings()
     deps: list[str] = []
     readme_text: str = ""
@@ -377,45 +409,120 @@ async def _embed_source_live(
                 fetch_dependencies(client, owner, name),
             )
     except Exception as exc:
-        logger.warning("GitHub fetch failed for %s/%s: %s", owner, name, exc)
-        return source, None, []
+        logger.exception("GitHub fetch failed for %s/%s", owner, name)
+        raise EmbedError(
+            f"could not fetch README from GitHub for {owner}/{name}: {exc}"
+        ) from exc
 
-    # 2. Embed and store description (source.description from quick_save)
-    if source.description and source.description.strip():
+    if not readme_text or not readme_text.strip():
+        raise EmbedError(
+            f"repo {owner}/{name} has no README — cannot embed"
+        )
+
+    # 2. Effective description: prefer the GitHub one, else extract from README
+    effective_description = get_effective_description(
+        source.description, readme_text,
+    )
+    if not effective_description:
+        # Last-ditch fallback: use the first ~200 chars of the cleaned README
+        effective_description = readme_text.strip()[:200].replace("\n", " ")
+
+    # If the effective description differs from what's in the DB, persist it
+    # so future visits and the description_cosine_sim signal both see it.
+    if effective_description != (source.description or ""):
         try:
-            desc_emb = await embed_text(source.description)
-            await data.set_description_embedding(
-                session, repo_id=source.id, description_embedding=desc_emb,
+            await data.upsert_repo(
+                session,
+                repo_id=source.id,
+                owner=source.owner,
+                name=source.name,
+                full_name=source.full_name,
+                description=effective_description,
+                language=source.language,
+                topics=source.topics,
+                stars=source.stars,
+                dependencies=deps,
             )
-            source = source.model_copy(update={"description_embedding": desc_emb})
-            logger.info("  embedded description for %s/%s", owner, name)
-        except Exception as exc:
-            logger.warning("description embedding failed for %s/%s: %s", owner, name, exc)
+            source = source.model_copy(update={"description": effective_description})
+        except Exception:
+            logger.exception("failed to persist effective description for %s/%s", owner, name)
 
-    # 3. Embed and store README
-    if readme_text and readme_text.strip():
-        try:
-            embedding = await embed_text(readme_text[:8000])
-            await data.set_embedding(session, repo_id=source.id, embedding=embedding)
-            source = source.model_copy(update={"embedding": embedding})
-            logger.info("  embedded README for %s/%s", owner, name)
-        except Exception as exc:
-            logger.warning("README embedding failed for %s/%s: %s", owner, name, exc)
+    # 3. Embed the effective description
+    try:
+        desc_emb = await embed_text(effective_description)
+    except Exception as exc:
+        logger.exception("description embedding failed for %s/%s", owner, name)
+        raise EmbedError(
+            f"description embedding via Gemini failed for {owner}/{name}: {exc}"
+        ) from exc
 
-    # 4. Extract README tokens for keyword matching (readme_topic_sim)
+    if not desc_emb or all(v == 0.0 for v in desc_emb):
+        raise EmbedError(
+            f"description embedding returned zero vector for {owner}/{name} — "
+            "check EMBEDDING_API mode and API key"
+        )
+
+    try:
+        await data.set_description_embedding(
+            session, repo_id=source.id, description_embedding=desc_emb,
+        )
+        source = source.model_copy(update={"description_embedding": desc_emb})
+    except Exception:
+        logger.exception("failed to persist description_embedding for %s/%s", owner, name)
+        raise
+
+    # 4. Embed the README
+    readme_for_embed = readme_text[:8000]
+    try:
+        readme_emb = await embed_text(readme_for_embed)
+    except Exception as exc:
+        logger.exception("README embedding failed for %s/%s", owner, name)
+        raise EmbedError(
+            f"README embedding via Gemini failed for {owner}/{name}: {exc}"
+        ) from exc
+
+    if not readme_emb or all(v == 0.0 for v in readme_emb):
+        raise EmbedError(
+            f"README embedding returned zero vector for {owner}/{name} — "
+            "check EMBEDDING_API mode and API key"
+        )
+
+    try:
+        await data.set_embedding(session, repo_id=source.id, embedding=readme_emb)
+        source = source.model_copy(update={"embedding": readme_emb})
+    except Exception:
+        logger.exception("failed to persist embedding for %s/%s", owner, name)
+        raise
+
+    # 5. Extract README tokens for the readme_topic_sim feature
+    from reporelay_mvp.features import _tokenize_readme
+
     readme_tokens: set[str] | None = None
     if readme_text and readme_text.strip():
-        from reporelay_mvp.features import _tokenize_readme
-
         readme_tokens = _tokenize_readme(source.full_name, readme_text)
 
-    # 5. Persist to DB so next visit is instant
+    # 6. Persist everything in one commit so the next request sees it all
     try:
         await session.commit()
-    except Exception as exc:
-        logger.warning("DB commit failed after live embed: %s", exc)
+    except Exception:
+        logger.exception("DB commit failed after live embed for %s/%s", owner, name)
+        raise
 
-    return source, readme_tokens, deps
+    logger.info(
+        "live embedding complete for %s/%s (desc=%d chars → vec, readme=%d chars → vec, tokens=%d)",
+        owner, name, len(effective_description), len(readme_for_embed),
+        len(readme_tokens) if readme_tokens else 0,
+    )
+    return source, readme_tokens, deps, {
+        "desc_emb": "ok",
+        "readme_emb": "ok",
+        "effective_description": effective_description[:200],
+    }
+
+
+class EmbedError(Exception):
+    """Raised when we can't produce a real embedding for a new source repo."""
+    pass
 
 
 async def _expand_pool(

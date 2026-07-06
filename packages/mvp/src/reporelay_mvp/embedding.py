@@ -306,22 +306,20 @@ async def _embed_via_voyage(text_value: str) -> list[float]:
 
 
 async def _embed_via_gemini(text_value: str) -> list[float]:
-    """Call Google Gemini gemini-embedding-2-preview with output_dimensionality=512.
+    """Call Google Gemini gemini-embedding-001 with output_dimensionality=512.
 
     Uses Matryoshka Representation Learning (MRL) to shrink the native
     3072-dim output to 512. This matches the current DB schema without
     requiring a migration.
 
-    Free tier: ~100 RPM, 1000 requests/day per project. No credit card
-    needed. Get a key at https://aistudio.google.com/
-
-    We use the gemini-embedding-2-preview model because it has a separate
-    quota from gemini-embedding-001 and is more likely to be available
-    on fresh API projects.
-
     For document indexing (README/description), use task_type=
     'RETRIEVAL_DOCUMENT'. For query-time embedding, use 'RETRIEVAL_QUERY'
     — see embed_text_query().
+
+    The google-generativeai SDK has shipped two response shapes:
+      - newer (>=0.5): `{"embedding": [...]}` for single input
+      - older:         `{"embeddings": [[...]]}`
+    We accept both so a package upgrade can't silently break us.
     """
     if not text_value or not text_value.strip():
         return [0.0] * DIMENSION
@@ -336,9 +334,33 @@ async def _embed_via_gemini(text_value: str) -> list[float]:
             task_type="retrieval_document",
             output_dimensionality=DIMENSION,
         )
-        return [float(x) for x in result["embedding"]]
+        # Accept both response shapes
+        if isinstance(result, dict):
+            if "embedding" in result and result["embedding"] is not None:
+                vec = result["embedding"]
+            elif "embeddings" in result and result["embeddings"]:
+                vec = result["embeddings"][0]
+            else:
+                raise RuntimeError(
+                    f"Gemini embed_content returned no embedding key; keys={list(result.keys())}"
+                )
+        else:
+            # Some SDK versions return an EmbeddingResponse object
+            vec = getattr(result, "embedding", None) or getattr(result, "embeddings", [[]])[0]
+        if not vec:
+            raise RuntimeError("Gemini returned empty embedding vector")
+        return [float(x) for x in vec]
 
-    return await asyncio.to_thread(_call)
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            return await asyncio.to_thread(_call)
+        except Exception as exc:
+            last_exc = exc
+            # Brief backoff — 0.5s, 1s. Don't hammer the API on transient errors.
+            await asyncio.sleep(0.5 * (attempt + 1))
+            logger.warning("Gemini embed attempt %d failed: %s", attempt + 1, exc)
+    raise RuntimeError(f"Gemini embed failed after 3 attempts: {last_exc}")
 
 
 async def _embed_via_local_model(text_value: str) -> list[float]:

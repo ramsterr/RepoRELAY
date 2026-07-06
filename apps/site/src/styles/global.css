@@ -187,12 +187,16 @@ rect.c4 { fill: var(--cell-4); }
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: radial-gradient(ellipse at 50% 30%, transparent 0%, transparent 45%, rgba(0, 0, 0, 0.35) 100%);
+  background:
+    radial-gradient(ellipse at 50% 18%, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.22) 32%, transparent 62%),
+    radial-gradient(ellipse at 50% 30%, transparent 0%, transparent 45%, rgba(0, 0, 0, 0.35) 100%);
   transition: background 0.3s ease;
 }
 
 [data-theme="light"] .grid-vignette {
-  background: radial-gradient(ellipse at 50% 30%, transparent 0%, transparent 45%, rgba(15, 23, 42, 0.08) 100%);
+  background:
+    radial-gradient(ellipse at 50% 18%, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.22) 32%, transparent 62%),
+    radial-gradient(ellipse at 50% 30%, transparent 0%, transparent 45%, rgba(15, 23, 42, 0.08) 100%);
 }
 
 .noise-overlay {

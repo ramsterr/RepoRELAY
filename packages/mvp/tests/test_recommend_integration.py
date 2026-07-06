@@ -126,11 +126,12 @@ class TestFullWorkflow:
     async def test_new_repo_workflow_completes_before_returning(self):
         """When a brand new repo is pasted, the full pipeline must complete:
         1. quick_save fetches metadata from GitHub
-        2. _embed_source_live fetches README + embeds both vectors via Gemini
+        2. _embed_description_fast fetches README + embeds description via Gemini
         3. generate_candidates builds a pool using the in-memory embedding
         4. score_many scores each candidate against the source
         5. rerank applies diversity rules
         6. Only then do we return results.
+        README embed is scheduled as a background task.
         """
         source = _make_source_repo(description="A fast widget library")
         candidates = [
@@ -146,21 +147,21 @@ class TestFullWorkflow:
             call_order.append("quick_save")
             return 1001
 
-        async def mock_embed_source_live(src, owner, name, session):
-            call_order.append("embed_source_live")
+        async def mock_embed_description_fast(src, owner, name, session):
+            call_order.append("embed_description_fast")
             updated = src.model_copy(update={
                 "embedding": [0.1 * (i % 10 + 1) for i in range(512)],
                 "description_embedding": [0.05 * (i % 10 + 1) for i in range(512)],
             })
-            return updated, {"widget", "python", "data"}, ["numpy", "pandas"], {
-                "desc_emb": "ok", "readme_emb": "ok",
+            return updated, {"widget", "python", "data"}, ["numpy", "pandas"], "# readme text", {
+                "desc_emb": "ok", "readme_emb": "pending",
                 "effective_description": "A fast widget library",
             }
 
         async def mock_expand_pool(session, src, *, seed=None, tags=None):
             call_order.append("expand_pool")
-            assert src.embedding is not None, "expand_pool must see a source with real embedding"
-            assert any(v != 0.0 for v in src.embedding), "embedding must be non-zero"
+            assert src.description_embedding is not None, "expand_pool must see a source with real desc embedding"
+            assert any(v != 0.0 for v in src.description_embedding), "desc embedding must be non-zero"
             return [(c, 0.5) for c in candidates]
 
         async def mock_score_many(src, cands, **kwargs):
@@ -178,7 +179,8 @@ class TestFullWorkflow:
             patch.object(recommend_module, "quick_save", side_effect=mock_quick_save),
             patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
             patch.object(recommend_module.data, "get_repo", AsyncMock(side_effect=[None, source])),
-            patch.object(recommend_module, "_embed_source_live", side_effect=mock_embed_source_live),
+            patch.object(recommend_module, "_embed_description_fast", side_effect=mock_embed_description_fast),
+            patch.object(recommend_module, "_schedule_readme_background"),
             patch.object(recommend_module, "_expand_pool", side_effect=mock_expand_pool),
             patch.object(recommend_module, "score_many", side_effect=mock_score_many),
             patch.object(recommend_module, "rerank") as mock_rerank,
@@ -195,7 +197,7 @@ class TestFullWorkflow:
 
         # Verify the pipeline ran in the correct order
         assert call_order == [
-            "quick_save", "embed_source_live", "expand_pool", "score_many",
+            "quick_save", "embed_description_fast", "expand_pool", "score_many",
         ], f"pipeline stages ran out of order: {call_order}"
 
         # Verify the result is complete
@@ -203,7 +205,7 @@ class TestFullWorkflow:
         assert len(result.repos) == 1
         assert result.repos[0].full_name == "other/lib-a"
         assert result.embed_status["desc_emb"] == "ok"
-        assert result.embed_status["readme_emb"] == "ok"
+        assert result.embed_status["readme_emb"] == "pending"
 
     @pytest.mark.asyncio
     async def test_existing_repo_with_embeddings_skips_embed(self):
@@ -618,9 +620,8 @@ class TestFailureHandling:
 
     @pytest.mark.asyncio
     async def test_recommend_raises_when_source_still_has_no_embedding(self):
-        """After _embed_source_live, if the source STILL has no real
-        embedding (shouldn't happen, but defensive), recommend() must
-        raise EmbedError instead of returning SQL-only noise."""
+        """After _embed_description_fast, if the source STILL has no real
+        description embedding, recommend() must raise EmbedError."""
         recommend_module._rec_cache.clear()
 
         source_no_emb = _make_source_repo(
@@ -629,18 +630,17 @@ class TestFailureHandling:
             description_embedding=None,
         )
 
-        async def mock_embed_live(src, owner, name, session):
-            # Return source with still-None embeddings (simulates a bug)
-            return src, None, [], {"desc_emb": "failed", "readme_emb": "failed"}
+        async def mock_embed_fast(src, owner, name, session):
+            return src, None, [], "", {"desc_emb": "failed", "readme_emb": "missing"}
 
         mock_session = FakeSession()
 
         with (
             patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
             patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
-            patch.object(recommend_module, "_embed_source_live", side_effect=mock_embed_live),
+            patch.object(recommend_module, "_embed_description_fast", side_effect=mock_embed_fast),
         ):
-            with pytest.raises(EmbedError, match="no README embedding"):
+            with pytest.raises(EmbedError, match="no description embedding"):
                 await recommend("acme/widget", limit=5)
 
         recommend_module._rec_cache.clear()

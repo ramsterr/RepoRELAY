@@ -296,47 +296,48 @@ async def recommend(
             if source is None:
                 raise LookupError(f"failed to fetch repo {full_name!r} from GitHub")
 
-        # Check if source has real vectors. If not, embed description + README
-        # live via Gemini API. This gives real recommendations on first visit
-        # instead of borrowing a proxy vector from a random similar repo.
+        # Check if source has real vectors. If not, embed description
+        # synchronously (1 Gemini call, ~3-5s) and schedule README
+        # embed as a background task. This gives the user results in
+        # ~8-12s instead of 15-25s.
         from reporelay_mvp.data import is_real_vector
         source_has_desc_emb = is_real_vector(source.description_embedding)
         source_has_readme_emb = is_real_vector(source.embedding)
         source_needs_embed = not source_has_desc_emb or not source_has_readme_emb
 
         source_readme_tokens = None
+        readme_text_for_bg: str = ""
         embed_status: dict[str, str] = {
             "desc_emb": "cached" if source_has_desc_emb else "missing",
             "readme_emb": "cached" if source_has_readme_emb else "missing",
         }
+
         if source_needs_embed:
-            logger.info("repo %s has no real vectors — embedding live via Gemini", full_name)
+            logger.info("repo %s has no real vectors — fast-embedding description", full_name)
             try:
-                source, source_readme_tokens, deps, embed_status = await asyncio.wait_for(
-                    _embed_source_live(source, owner, name, session),
-                    timeout=45.0,
+                source, source_readme_tokens, deps, readme_text_for_bg, embed_status = await asyncio.wait_for(
+                    _embed_description_fast(source, owner, name, session),
+                    timeout=25.0,
                 )
             except asyncio.TimeoutError:
                 raise EmbedError(
-                    f"embedding pipeline timed out for {full_name} after 45s — "
-                    "Gemini API may be slow or unreachable"
+                    f"description embedding timed out for {full_name} after 25s"
                 ) from None
             if deps:
                 source = source.model_copy(update={"dependencies": deps})
 
-        # Final safety check: if the source STILL has no real embedding
-        # at this point, fail loudly. Returning "random" results from a
-        # SQL-only pool is a worse UX than an explicit error.
-        if not is_real_vector(source.embedding):
-            raise EmbedError(
-                f"source repo {full_name} has no README embedding — "
-                "cannot run vector search against the corpus"
-            )
+        # Description embedding is REQUIRED — it's the primary signal
         if not is_real_vector(source.description_embedding):
             raise EmbedError(
                 f"source repo {full_name} has no description embedding — "
-                "cannot run description similarity against the corpus"
+                "cannot run similarity against the corpus"
             )
+
+        # README embedding is optional for the first request — we have
+        # readme_vs_desc_cosine_sim as a fallback. Schedule background
+        # embed so the NEXT request has full quality.
+        if not is_real_vector(source.embedding) and readme_text_for_bg:
+            _schedule_readme_background(source.id, owner, name, readme_text_for_bg)
 
         candidates = await _expand_pool(session, source, seed=seed, tags=tags)
 
@@ -365,6 +366,145 @@ async def recommend(
         return result
     finally:
         await session.close()
+
+
+async def _embed_description_fast(
+    source: Repo,
+    owner: str,
+    name: str,
+    session: Any,
+) -> tuple[Repo, set[str] | None, list[str], str, dict[str, str]]:
+    """Fast path: fetch README + embed description only (1 Gemini call).
+
+    Returns in ~5-8s (GitHub fetch + 1 Gemini call) instead of 15-25s
+    (GitHub fetch + 2 Gemini calls). The README text is returned so the
+    caller can schedule a background embed.
+
+    Returns (updated_source, readme_tokens, dependencies, readme_text, status).
+    """
+    from reporelay_mvp.purpose import get_effective_description
+
+    settings = get_mvp_settings()
+    deps: list[str] = []
+    readme_text: str = ""
+
+    # 1. Fetch README + dependencies from GitHub
+    try:
+        async with _auth_client(settings.github_token) as client:
+            readme_text, deps = await asyncio.wait_for(
+                asyncio.gather(
+                    fetch_readme(client, owner, name),
+                    fetch_dependencies(client, owner, name),
+                ),
+                timeout=15.0,
+            )
+    except asyncio.TimeoutError:
+        logger.error("GitHub fetch timed out for %s/%s after 15s", owner, name)
+        raise EmbedError(
+            f"GitHub API timed out fetching README for {owner}/{name}"
+        ) from None
+    except Exception as exc:
+        logger.exception("GitHub fetch failed for %s/%s", owner, name)
+        raise EmbedError(
+            f"could not fetch README from GitHub for {owner}/{name}: {exc}"
+        ) from exc
+
+    if not readme_text or not readme_text.strip():
+        raise EmbedError(f"repo {owner}/{name} has no README — cannot embed")
+
+    # 2. Effective description
+    effective_description = get_effective_description(source.description, readme_text)
+    if not effective_description:
+        effective_description = readme_text.strip()[:200].replace("\n", " ")
+
+    if effective_description != (source.description or ""):
+        try:
+            await data.upsert_repo(
+                session,
+                repo_id=source.id, owner=source.owner, name=source.name,
+                full_name=source.full_name, description=effective_description,
+                language=source.language, topics=source.topics,
+                stars=source.stars, dependencies=deps,
+            )
+            source = source.model_copy(update={"description": effective_description})
+        except Exception:
+            logger.exception("failed to persist description for %s/%s", owner, name)
+
+    # 3. Embed the description (1 Gemini call — the fast part)
+    try:
+        desc_emb = await embed_text(effective_description)
+    except Exception as exc:
+        logger.exception("description embedding failed for %s/%s", owner, name)
+        raise EmbedError(f"description embedding failed for {owner}/{name}: {exc}") from exc
+
+    from reporelay_mvp.data import is_real_vector
+    if not is_real_vector(desc_emb):
+        raise EmbedError(f"description embedding returned zero/NaN for {owner}/{name}")
+
+    try:
+        await data.set_description_embedding(session, repo_id=source.id, description_embedding=desc_emb)
+        source = source.model_copy(update={"description_embedding": desc_emb})
+    except Exception:
+        logger.exception("failed to persist description_embedding for %s/%s", owner, name)
+        raise
+
+    # 4. Extract README tokens (for readme_topic_sim — works without embedding)
+    from reporelay_mvp.features import _tokenize_readme
+    readme_tokens = _tokenize_readme(source.full_name, readme_text) if readme_text.strip() else None
+
+    try:
+        await session.commit()
+    except Exception:
+        logger.exception("DB commit failed for %s/%s", owner, name)
+        raise
+
+    status = {
+        "desc_emb": "ok",
+        "readme_emb": "pending",
+        "effective_description": effective_description[:200],
+    }
+    logger.info("fast-embedded description for %s/%s (%d chars)", owner, name, len(effective_description))
+    return source, readme_tokens, deps, readme_text, status
+
+
+# ── Background README embedding ─────────────────────────────────────
+
+# Fire-and-forget task list. We use asyncio.create_task from the
+# endpoint handler. If the server restarts, pending tasks are lost —
+# that's fine: the next request will re-schedule them.
+_readme_bg_tasks: set[asyncio.Task] = set()
+
+
+def _schedule_readme_background(repo_id: int, owner: str, name: str, readme_text: str) -> None:
+    """Schedule a background task to embed the README via Gemini.
+
+    This runs AFTER the HTTP response is sent, so the user doesn't
+    wait for it. The next request for this repo will find the README
+    embedding already in the DB.
+    """
+    async def _bg_embed() -> None:
+        from reporelay_mvp.data import is_real_vector, get_session, set_embedding
+        try:
+            readme_emb = await asyncio.wait_for(
+                embed_text(readme_text[:8000]),
+                timeout=20.0,
+            )
+            if is_real_vector(readme_emb):
+                bg_session = await get_session()
+                try:
+                    await set_embedding(bg_session, repo_id=repo_id, embedding=readme_emb)
+                    await bg_session.commit()
+                    logger.info("background: embedded README for %s/%s", owner, name)
+                finally:
+                    await bg_session.close()
+            else:
+                logger.warning("background: README embedding returned zero for %s/%s", owner, name)
+        except Exception:
+            logger.exception("background: README embedding failed for %s/%s", owner, name)
+
+    task = asyncio.create_task(_bg_embed())
+    _readme_bg_tasks.add(task)
+    task.add_done_callback(_readme_bg_tasks.discard)
 
 
 async def _embed_source_live(

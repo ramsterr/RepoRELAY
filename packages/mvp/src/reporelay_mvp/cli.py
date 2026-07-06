@@ -564,7 +564,11 @@ def infer_topics_cmd(
 @app.command("extract-keywords")
 def extract_keywords_cmd(
     limit: int = typer.Option(5000, help="max repos to process"),
-    concurrency: int = typer.Option(4, help="parallel processing"),
+    concurrency: int = typer.Option(8, help="parallel processing"),
+    no_readme: bool = typer.Option(
+        False, "--no-readme",
+        help="skip GitHub README fetch — use descriptions only (10x faster)",
+    ),
 ) -> None:
     """Extract search keywords from repo descriptions + READMEs.
 
@@ -572,17 +576,14 @@ def extract_keywords_cmd(
     keywords[] column for fast search via GIN index. Also populates
     the search_vector tsvector column for full-text search.
 
-    Keywords come from:
-      - Description (higher weight) — "open-source pixel generation"
-      - README (lower weight) — the first 5000 chars
-
-    After extraction, you can search via:
-      GET /search?q=game+development+pixel&mode=hybrid
+    By default, only repos with short/null descriptions get their README
+    fetched from GitHub (slow). Repos with solid descriptions extract
+    keywords locally (fast). Use --no-readme to skip ALL GitHub fetches.
     """
     _configure_logging()
 
     from reporelay_mvp import data
-    from reporelay_mvp.keyword_extractor import extract_keywords_from_repo
+    from reporelay_mvp.keyword_extractor import extract_keywords, extract_keywords_from_repo
     from reporelay_mvp.github import _auth_client, fetch_readme
     from reporelay_mvp.settings import get_mvp_settings
 
@@ -597,7 +598,12 @@ def extract_keywords_cmd(
             console.print("[yellow]no repos need keyword extraction[/yellow]")
             return 0, 0
 
+        # Count how many have solid descriptions (no GitHub needed)
+        desc_ok = sum(1 for r in repos if r.description and len(r.description.strip()) >= 50)
+        needs_readme = len(repos) - desc_ok
         console.print(f"[bold]extracting keywords for {len(repos)} repos[/bold]")
+        console.print(f"  {desc_ok} with solid descriptions (fast, no GitHub)")
+        console.print(f"  {needs_readme} need README fetch (slow, GitHub API)")
 
         settings = get_mvp_settings()
         sem = asyncio.Semaphore(concurrency)
@@ -606,15 +612,26 @@ def extract_keywords_cmd(
         async def process_one(repo: Any) -> bool:
             async with sem:
                 readme: str | None = None
-                try:
-                    async with _auth_client(settings.github_token) as client:
-                        fetched = await fetch_readme(client, repo.owner, repo.name)
-                        if fetched and fetched.strip():
-                            readme = fetched
-                except Exception:
-                    pass
 
-                keywords = extract_keywords_from_repo(repo.description, readme)
+                # Only fetch README from GitHub if description is too short/null
+                # AND --no-readme is not set
+                desc_short = not repo.description or len(repo.description.strip()) < 50
+                if desc_short and not no_readme:
+                    try:
+                        async with _auth_client(settings.github_token) as client:
+                            fetched = await fetch_readme(client, repo.owner, repo.name)
+                            if fetched and fetched.strip():
+                                readme = fetched
+                    except Exception:
+                        pass
+
+                if readme:
+                    keywords = extract_keywords_from_repo(repo.description, readme)
+                elif repo.description:
+                    keywords = extract_keywords(repo.description)
+                else:
+                    keywords = []
+
                 if not keywords:
                     return False
 
@@ -630,9 +647,9 @@ def extract_keywords_cmd(
         for i, ok in enumerate(await asyncio.gather(*tasks)):
             if ok:
                 updated += 1
-            if (i + 1) % 100 == 0 or (i + 1) == len(repos):
+            if (i + 1) % 200 == 0 or (i + 1) == len(repos):
                 console.print(f"  progress: {i+1}/{len(repos)}")
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
 
         return updated, len(repos)
 

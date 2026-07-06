@@ -65,6 +65,27 @@ import "../styles/global.css";
         function pow(a, b) { return Math.pow(a, b); }
         function log(n) { return Math.log(n); }
 
+        function hexToRgb(hex) {
+          var r = parseInt(hex.slice(1, 3), 16);
+          var g = parseInt(hex.slice(3, 5), 16);
+          var b = parseInt(hex.slice(5, 7), 16);
+          return { r: r, g: g, b: b };
+        }
+        function rgbToHex(r, g, b) {
+          return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+        }
+        function shade(hex, percent) {
+          var rgb = hexToRgb(hex);
+          var r = clamp(Math.round(rgb.r * (1 + percent)), 0, 255);
+          var g = clamp(Math.round(rgb.g * (1 + percent)), 0, 255);
+          var b = clamp(Math.round(rgb.b * (1 + percent)), 0, 255);
+          return rgbToHex(r, g, b);
+        }
+        function alpha(hex, a) {
+          var rgb = hexToRgb(hex);
+          return "rgba(" + rgb.r + "," + rgb.g + "," + rgb.b + "," + a + ")";
+        }
+
         function makeNoise(rand) {
           var grid = [];
           for (var i = 0; i < 64; i++) { grid[i] = []; for (var j = 0; j < 64; j++) grid[i][j] = rand(); }
@@ -104,6 +125,7 @@ import "../styles/global.css";
             cellSize: 16,
             dark: ["#0b1026", "#142850", "#1f5f6b", "#2ecc71", "#a3ffce"],
             light: ["#e8f4f8", "#9bd3e6", "#4db6ac", "#2e8b7b", "#0d5c4d"],
+            accent: "#2ecc71",
             fn: function (c, rand, cols, rows) {
               var noise = makeNoise(rand);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -121,6 +143,7 @@ import "../styles/global.css";
             cellSize: 12,
             dark: ["#03142b", "#0a3a62", "#176fa8", "#2aa4d8", "#7ee7ff"],
             light: ["#e6f4fa", "#8ecae6", "#219ebc", "#126782", "#023047"],
+            accent: "#2aa4d8",
             fn: function (c, rand, cols, rows) {
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
                 var nx = x / cols, ny = y / rows;
@@ -139,6 +162,7 @@ import "../styles/global.css";
             cellSize: 14,
             dark: ["#0a0a1a", "#1a1a3e", "#4a4a8a", "#a29bfe", "#ffffff"],
             light: ["#f0f0ff", "#c9c9f5", "#8e8edb", "#5b5bbd", "#2a2a6a"],
+            accent: "#a29bfe",
             fn: function (c, rand, cols, rows) {
               var minDim = min(cols, rows);
               var cx = cols / 2, cy = rows / 2;
@@ -163,6 +187,7 @@ import "../styles/global.css";
             cellSize: 14,
             dark: ["#0f1724", "#1e3a5f", "#2d5a87", "#5a9fd4", "#b8e3ff"],
             light: ["#f1f5f9", "#cbd5e1", "#94a3b8", "#64748b", "#334155"],
+            accent: "#5a9fd4",
             fn: function (c, rand, cols, rows) {
               var ridges = [];
               for (var i = 0; i < 5; i++) ridges.push({ x: rand() * cols, h: 0.3 + rand() * 0.6, w: 0.15 + rand() * 0.25 });
@@ -187,6 +212,7 @@ import "../styles/global.css";
             cellSize: 20,
             dark: ["#1a0b2e", "#431c5d", "#7c3aed", "#c084fc", "#f3e8ff"],
             light: ["#faf5ff", "#e9d5ff", "#c084fc", "#9333ea", "#581c87"],
+            accent: "#c084fc",
             fn: function (c, rand, cols, rows) {
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
                 var dx = abs((x % 10) - 5), dy = abs((y % 10) - 5);
@@ -203,6 +229,7 @@ import "../styles/global.css";
             cellSize: 12,
             dark: ["#051208", "#0f291e", "#1a5233", "#2e8b57", "#7ee787"],
             light: ["#f0fdf4", "#bbf7d0", "#4ade80", "#16a34a", "#14532d"],
+            accent: "#2e8b57",
             fn: function (c, rand, cols, rows) {
               var noise = makeNoise(rand);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -231,6 +258,7 @@ import "../styles/global.css";
             cellSize: 10,
             dark: ["#020a02", "#063a06", "#0a8a0a", "#15d815", "#aaffaa"],
             light: ["#f0fdf0", "#bbf7bb", "#22c522", "#15803d", "#14532d"],
+            accent: "#15d815",
             fn: function (c, rand, cols, rows) {
               var noise = makeNoise(rand);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -250,6 +278,7 @@ import "../styles/global.css";
             cellSize: 18,
             dark: ["#111827", "#374151", "#6b7280", "#fbbf24", "#fef3c7"],
             light: ["#f9fafb", "#e5e7eb", "#9ca3af", "#f59e0b", "#78350f"],
+            accent: "#fbbf24",
             fn: function (c, rand, cols, rows) {
               var minDim = min(cols, rows);
               var size = max(2.5, minDim / 24);
@@ -272,6 +301,7 @@ import "../styles/global.css";
             cellSize: 8,
             dark: ["#1a0b1a", "#4a1a4a", "#b85cb8", "#f0a0f0", "#ffe4ff"],
             light: ["#fdf2f8", "#fbcfe8", "#f472b6", "#db2777", "#831843"],
+            accent: "#f0a0f0",
             fn: function (c, rand, cols, rows) {
               var minDim = min(cols, rows);
               var cx = cols / 2, cy = rows / 2;
@@ -301,6 +331,7 @@ import "../styles/global.css";
             cellSize: 14,
             dark: ["#1a0f0a", "#7c2d12", "#ea580c", "#fbbf24", "#fff7ed"],
             light: ["#fff7ed", "#fed7aa", "#f97316", "#c2410c", "#7c2d12"],
+            accent: "#fbbf24",
             fn: function (c, rand, cols, rows) {
               var cx = cols / 2, cy = rows / 2;
               var rays = 14 + floor(rand() * 8);
@@ -320,6 +351,7 @@ import "../styles/global.css";
             cellSize: 12,
             dark: ["#0f172a", "#1e40af", "#3b82f6", "#93c5fd", "#dbeafe"],
             light: ["#eff6ff", "#bfdbfe", "#60a5fa", "#2563eb", "#1e3a8a"],
+            accent: "#3b82f6",
             fn: function (c, rand, cols, rows) {
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
                 var w1 = sin(x * 0.08 + y * 0.04) * 0.5 + 0.5;
@@ -335,6 +367,7 @@ import "../styles/global.css";
             cellSize: 20,
             dark: ["#18181b", "#27272a", "#52525b", "#a1a1aa", "#f4f4f5"],
             light: ["#ffffff", "#f4f4f5", "#d4d4d8", "#a1a1aa", "#52525b"],
+            accent: "#a1a1aa",
             fn: function (c, rand, cols, rows) {
               var s = 4;
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -349,6 +382,7 @@ import "../styles/global.css";
             cellSize: 22,
             dark: ["#1a0a2e", "#4a1a6b", "#d9467c", "#f97316", "#fef08a"],
             light: ["#fff7ed", "#fed7aa", "#fb923c", "#ea580c", "#7c2d12"],
+            accent: "#f97316",
             fn: function (c, rand, cols, rows) {
               var sunY = floor(rows * 0.42);
               var sunX = floor(cols * 0.55);
@@ -378,6 +412,7 @@ import "../styles/global.css";
             cellSize: 18,
             dark: ["#020617", "#0f172a", "#334155", "#fbbf24", "#e2e8f0"],
             light: ["#f8fafc", "#e2e8f0", "#94a3b8", "#f59e0b", "#475569"],
+            accent: "#fbbf24",
             fn: function (c, rand, cols, rows) {
               var buildings = [];
               var bx = 0;
@@ -406,6 +441,7 @@ import "../styles/global.css";
             cellSize: 20,
             dark: ["#001a33", "#003d66", "#006994", "#00a8e8", "#a5f3fc"],
             light: ["#ecfeff", "#a5f3fc", "#22d3ee", "#0891b2", "#164e63"],
+            accent: "#00a8e8",
             fn: function (c, rand, cols, rows) {
               var bubbles = makeSeeds(rand, cols, rows, 18);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -430,6 +466,7 @@ import "../styles/global.css";
             cellSize: 14,
             dark: ["#0f0518", "#2d1b4e", "#7c3aed", "#c084fc", "#fae8ff"],
             light: ["#faf5ff", "#e9d5ff", "#c084fc", "#9333ea", "#581c87"],
+            accent: "#c084fc",
             fn: function (c, rand, cols, rows) {
               var noise = makeNoise(rand);
               var clouds = makeSeeds(rand, cols, rows, 8);
@@ -453,6 +490,7 @@ import "../styles/global.css";
             cellSize: 18,
             dark: ["#2a0a1a", "#5c1e3a", "#db2777", "#f9a8d4", "#fce7f3"],
             light: ["#fdf2f8", "#fbcfe8", "#f472b6", "#db2777", "#9d174d"],
+            accent: "#f9a8d4",
             fn: function (c, rand, cols, rows) {
               var petals = makeSeeds(rand, cols, rows, 35);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -472,6 +510,7 @@ import "../styles/global.css";
             cellSize: 20,
             dark: ["#281306", "#7c2d12", "#c2410c", "#fdba74", "#ffedd5"],
             light: ["#fff7ed", "#fed7aa", "#fb923c", "#ea580c", "#9a3412"],
+            accent: "#fdba74",
             fn: function (c, rand, cols, rows) {
               var cactusX = floor(cols * 0.72);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -495,6 +534,7 @@ import "../styles/global.css";
             cellSize: 18,
             dark: ["#0a0505", "#450a0a", "#b91c1c", "#f97316", "#fef08a"],
             light: ["#fef2f2", "#fecaca", "#ef4444", "#c2410c", "#7f1d1d"],
+            accent: "#f97316",
             fn: function (c, rand, cols, rows) {
               var peakX = floor(cols / 2);
               var peakY = floor(rows * 0.38);
@@ -521,6 +561,7 @@ import "../styles/global.css";
             cellSize: 16,
             dark: ["#081016", "#0e7490", "#22d3ee", "#a5f3fc", "#ecfeff"],
             light: ["#ecfeff", "#a5f3fc", "#22d3ee", "#0891b2", "#164e63"],
+            accent: "#22d3ee",
             fn: function (c, rand, cols, rows) {
               var crystals = makeSeeds(rand, cols, rows, 24);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -542,6 +583,7 @@ import "../styles/global.css";
             cellSize: 22,
             dark: ["#2a0a1a", "#86198f", "#d946ef", "#f0abfc", "#fae8ff"],
             light: ["#fdf4ff", "#f5d0fe", "#e879f9", "#c026d3", "#701a75"],
+            accent: "#f0abfc",
             fn: function (c, rand, cols, rows) {
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
                 var stripe = (floor(x / 3) + floor(y / 3)) % 2 === 0 ? 0.35 : 0.15;
@@ -557,6 +599,7 @@ import "../styles/global.css";
             cellSize: 14,
             dark: ["#050510", "#1e1b4b", "#06b6d4", "#22d3ee", "#e0f2fe"],
             light: ["#ecfeff", "#a5f3fc", "#06b6d4", "#0891b2", "#164e63"],
+            accent: "#06b6d4",
             fn: function (c, rand, cols, rows) {
               var horizon = floor(rows * 0.55);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -581,6 +624,7 @@ import "../styles/global.css";
             cellSize: 16,
             dark: ["#052e16", "#14532d", "#16a34a", "#facc15", "#fef9c3"],
             light: ["#f0fdf4", "#bbf7d0", "#4ade80", "#eab308", "#713f12"],
+            accent: "#facc15",
             fn: function (c, rand, cols, rows) {
               var flowers = makeSeeds(rand, cols, rows, 40);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -601,6 +645,7 @@ import "../styles/global.css";
             cellSize: 14,
             dark: ["#0f172a", "#1e293b", "#334155", "#60a5fa", "#dbeafe"],
             light: ["#f8fafc", "#cbd5e1", "#94a3b8", "#3b82f6", "#1e3a8a"],
+            accent: "#60a5fa",
             fn: function (c, rand, cols, rows) {
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
                 var v = 0.08 + (y / rows) * 0.18;
@@ -618,6 +663,7 @@ import "../styles/global.css";
             cellSize: 18,
             dark: ["#1a0f0a", "#7c2d12", "#c2410c", "#eab308", "#fef08a"],
             light: ["#fffbeb", "#fde68a", "#f59e0b", "#b45309", "#78350f"],
+            accent: "#f59e0b",
             fn: function (c, rand, cols, rows) {
               var leaves = makeSeeds(rand, cols, rows, 45);
               for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
@@ -637,6 +683,7 @@ import "../styles/global.css";
             cellSize: 18,
             dark: ["#0f1f14", "#1a4028", "#b91c1c", "#f87171", "#fecaca"],
             light: ["#f0fdf4", "#bbf7d0", "#fca5a5", "#dc2626", "#7f1d1d"],
+            accent: "#f87171",
             fn: function (c, rand, cols, rows) {
               var shrooms = [];
               for (var i = 0; i < 8; i++) shrooms.push({ x: rand() * cols, y: rows * 0.55 + rand() * rows * 0.4 });
@@ -662,6 +709,7 @@ import "../styles/global.css";
             cellSize: 20,
             dark: ["#0c4a6e", "#075985", "#fde047", "#facc15", "#fef9c3"],
             light: ["#ecfeff", "#7dd3fc", "#fde047", "#eab308", "#fefce8"],
+            accent: "#fde047",
             fn: function (c, rand, cols, rows) {
               var waterY = floor(rows * 0.58);
               var sunX = floor(cols * 0.78), sunY = floor(rows * 0.22), sunR = 4;
@@ -686,6 +734,7 @@ import "../styles/global.css";
             cellSize: 18,
             dark: ["#020617", "#0f172a", "#4f46e5", "#a5b4fc", "#e0e7ff"],
             light: ["#eef2ff", "#c7d2fe", "#818cf8", "#4f46e5", "#312e81"],
+            accent: "#818cf8",
             fn: function (c, rand, cols, rows) {
               var planets = [];
               for (var i = 0; i < 4; i++) planets.push({ x: rand() * cols, y: rand() * rows, r: 3 + rand() * 5 });
@@ -710,6 +759,7 @@ import "../styles/global.css";
             cellSize: 14,
             dark: ["#1a1025", "#701a75", "#ec4899", "#fb7185", "#fecdd3"],
             light: ["#fff1f2", "#fecdd3", "#fb7185", "#e11d48", "#881337"],
+            accent: "#fb7185",
             fn: function (c, rand, cols, rows) {
               var corals = [];
               for (var i = 0; i < 7; i++) corals.push({ x: rand() * cols, h: rows * (0.25 + rand() * 0.35), branches: 3 + floor(rand() * 4) });
@@ -735,6 +785,7 @@ import "../styles/global.css";
             cellSize: 18,
             dark: ["#0f172a", "#1e3a5f", "#78350f", "#b45309", "#fde68a"],
             light: ["#f8fafc", "#bfdbfe", "#d97706", "#92400e", "#451a03"],
+            accent: "#d97706",
             fn: function (c, rand, cols, rows) {
               var cabinX = floor(cols * 0.35);
               var cabinW = 8, cabinH = 7;
@@ -761,6 +812,7 @@ import "../styles/global.css";
             cellSize: 16,
             dark: ["#0f0518", "#4c1d95", "#ec4899", "#facc15", "#ffffff"],
             light: ["#faf5ff", "#ddd6fe", "#f472b6", "#eab308", "#71717a"],
+            accent: "#ec4899",
             fn: function (c, rand, cols, rows) {
               var cx = cols / 2, cy = rows / 3;
               var ballR = min(cols, rows) * 0.18;
@@ -794,6 +846,25 @@ import "../styles/global.css";
         function paletteStyle(theme) {
           var pal = isLight() ? theme.light : theme.dark;
           return "--cell-0:" + pal[0] + ";--cell-1:" + pal[1] + ";--cell-2:" + pal[2] + ";--cell-3:" + pal[3] + ";--cell-4:" + pal[4] + ";";
+        }
+
+        function applyThemeColors(theme) {
+          var base = theme.accent;
+          var main, dim, deep;
+          if (isLight()) {
+            main = shade(base, -0.25);
+            dim = shade(base, -0.4);
+            deep = shade(base, -0.55);
+          } else {
+            main = base;
+            dim = shade(base, -0.15);
+            deep = shade(base, -0.3);
+          }
+          var root = document.documentElement;
+          root.style.setProperty("--accent", main);
+          root.style.setProperty("--accent-dim", dim);
+          root.style.setProperty("--accent-deep", deep);
+          root.style.setProperty("--accent-glow", alpha(main, 0.35));
         }
 
         function computeCell(theme, vw, vh) {
@@ -844,6 +915,8 @@ import "../styles/global.css";
           currentArt = pi;
 
           var theme = THEMES[pi];
+          applyThemeColors(theme);
+
           var cell = computeCell(theme, w, h);
           var cols = ceil(w / cell) + 1;
           var rows = ceil(h / cell) + 1;

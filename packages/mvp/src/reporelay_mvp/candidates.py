@@ -54,12 +54,13 @@ async def generate_candidates(
     # missing/zero — this happens when the source was loaded by a code
     # path that didn't run the live embed (e.g. relevance feedback
     # virtual source, or a cached Repo that hasn't been re-fetched).
+    from reporelay_mvp.data import is_real_vector
     source_emb = source.embedding
-    if source_emb is None or all(v == 0.0 for v in source_emb):
+    if not is_real_vector(source_emb):
         source_emb = await data.get_embedding(session, source.id) or source_emb
 
     vector_pool: dict[int, tuple[Repo, float]] = {}
-    if source_emb and not all(v == 0.0 for v in source_emb):
+    if is_real_vector(source_emb):
         vector_pool = await data.fetch_vector_neighbors(
             session,
             source_embedding=source_emb,

@@ -299,14 +299,9 @@ async def recommend(
         # Check if source has real vectors. If not, embed description + README
         # live via Gemini API. This gives real recommendations on first visit
         # instead of borrowing a proxy vector from a random similar repo.
-        source_has_desc_emb = (
-            source.description_embedding is not None
-            and any(v != 0.0 for v in source.description_embedding)
-        )
-        source_has_readme_emb = (
-            source.embedding is not None
-            and any(v != 0.0 for v in source.embedding)
-        )
+        from reporelay_mvp.data import is_real_vector
+        source_has_desc_emb = is_real_vector(source.description_embedding)
+        source_has_readme_emb = is_real_vector(source.embedding)
         source_needs_embed = not source_has_desc_emb or not source_has_readme_emb
 
         source_readme_tokens = None
@@ -325,14 +320,12 @@ async def recommend(
         # Final safety check: if the source STILL has no real embedding
         # at this point, fail loudly. Returning "random" results from a
         # SQL-only pool is a worse UX than an explicit error.
-        if source.embedding is None or all(v == 0.0 for v in source.embedding):
+        if not is_real_vector(source.embedding):
             raise EmbedError(
                 f"source repo {full_name} has no README embedding — "
                 "cannot run vector search against the corpus"
             )
-        if source.description_embedding is None or all(
-            v == 0.0 for v in source.description_embedding
-        ):
+        if not is_real_vector(source.description_embedding):
             raise EmbedError(
                 f"source repo {full_name} has no description embedding — "
                 "cannot run description similarity against the corpus"
@@ -456,9 +449,10 @@ async def _embed_source_live(
             f"description embedding via Gemini failed for {owner}/{name}: {exc}"
         ) from exc
 
-    if not desc_emb or all(v == 0.0 for v in desc_emb):
+    from reporelay_mvp.data import is_real_vector
+    if not is_real_vector(desc_emb):
         raise EmbedError(
-            f"description embedding returned zero vector for {owner}/{name} — "
+            f"description embedding returned zero/NaN vector for {owner}/{name} — "
             "check EMBEDDING_API mode and API key"
         )
 
@@ -481,9 +475,9 @@ async def _embed_source_live(
             f"README embedding via Gemini failed for {owner}/{name}: {exc}"
         ) from exc
 
-    if not readme_emb or all(v == 0.0 for v in readme_emb):
+    if not is_real_vector(readme_emb):
         raise EmbedError(
-            f"README embedding returned zero vector for {owner}/{name} — "
+            f"README embedding returned zero/NaN vector for {owner}/{name} — "
             "check EMBEDDING_API mode and API key"
         )
 

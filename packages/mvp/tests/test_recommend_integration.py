@@ -598,7 +598,7 @@ class TestFailureHandling:
             with patch.object(recommend_module, "fetch_readme", AsyncMock(return_value=README_TEXT)):
                 with patch.object(recommend_module, "fetch_dependencies", AsyncMock(return_value=[])):
                     with patch.object(recommend_module, "embed_text", AsyncMock(return_value=[0.0] * 512)):
-                        with pytest.raises(EmbedError, match="zero vector"):
+                        with pytest.raises(EmbedError, match="zero/NaN vector"):
                             await _embed_source_live(source, "acme", "widget", fake_session)
 
     @pytest.mark.asyncio
@@ -855,4 +855,261 @@ class TestSourceComparedAgainstDBCorpus:
         assert scores_by_name["similar-lib"] > scores_by_name["different-lib"], (
             "similar-lib should score higher than different-lib based on "
             f"README embedding cosine similarity: {scores_by_name}"
+        )
+
+
+# ── 10. EMBEDDING VALIDATION — THE COMPARISON MUST BE REAL ─────────
+
+
+class TestEmbeddingValidation:
+    """Every embedding that enters the pipeline must be validated.
+    Zero vectors, NaN, and Inf must be caught before they corrupt
+    cosine distances."""
+
+    def test_is_real_vector_rejects_zero(self):
+        from reporelay_mvp.data import is_real_vector
+        assert not is_real_vector([0.0] * 512)
+        assert not is_real_vector([0.0, 0.0, 0.0])
+        assert not is_real_vector([])
+
+    def test_is_real_vector_rejects_none(self):
+        from reporelay_mvp.data import is_real_vector
+        assert not is_real_vector(None)
+
+    def test_is_real_vector_rejects_nan(self):
+        from reporelay_mvp.data import is_real_vector
+        v = [0.1] * 512
+        v[100] = float("nan")
+        assert not is_real_vector(v)
+
+    def test_is_real_vector_rejects_inf(self):
+        from reporelay_mvp.data import is_real_vector
+        v = [0.1] * 512
+        v[100] = float("inf")
+        assert not is_real_vector(v)
+
+    def test_is_real_vector_accepts_valid(self):
+        from reporelay_mvp.data import is_real_vector
+        assert is_real_vector([0.1 * (i % 10 + 1) for i in range(512)])
+        assert is_real_vector([0.001] * 512)
+
+    def test_to_pgvector_rejects_zero(self):
+        from reporelay_mvp.data import _to_pgvector
+        with pytest.raises(ValueError, match="all zeros"):
+            _to_pgvector([0.0] * 512)
+
+    def test_to_pgvector_rejects_nan(self):
+        from reporelay_mvp.data import _to_pgvector
+        v = [0.1] * 512
+        v[100] = float("nan")
+        with pytest.raises(ValueError, match="NaN"):
+            _to_pgvector(v)
+
+    def test_to_pgvector_rejects_inf(self):
+        from reporelay_mvp.data import _to_pgvector
+        v = [0.1] * 512
+        v[100] = float("inf")
+        with pytest.raises(ValueError, match="Inf"):
+            _to_pgvector(v)
+
+    def test_to_pgvector_accepts_valid(self):
+        from reporelay_mvp.data import _to_pgvector
+        result = _to_pgvector([0.1 * (i % 10 + 1) for i in range(512)])
+        assert result.startswith("[")
+        assert result.endswith("]")
+
+    @pytest.mark.asyncio
+    async def test_set_embedding_refuses_zero_vector(self):
+        """set_embedding must refuse to store a zero vector — this is
+        the root cause of the 'random results' bug."""
+        from reporelay_mvp.data import set_embedding
+        fake_session = AsyncMock()
+        with pytest.raises(ValueError, match="zero/NaN"):
+            await set_embedding(fake_session, repo_id=1, embedding=[0.0] * 512)
+
+    @pytest.mark.asyncio
+    async def test_set_description_embedding_refuses_zero_vector(self):
+        from reporelay_mvp.data import set_description_embedding
+        fake_session = AsyncMock()
+        with pytest.raises(ValueError, match="zero/NaN"):
+            await set_description_embedding(
+                fake_session, repo_id=1, description_embedding=[0.0] * 512,
+            )
+
+    @pytest.mark.asyncio
+    async def test_fetch_vector_neighbors_skips_zero_embedding_candidates(self):
+        """Candidates with zero embeddings in the DB must be skipped,
+        not returned with cosine_sim ≈ 1.0 (pgvector's wrong answer
+        for zero vectors)."""
+        from reporelay_mvp.data import fetch_vector_neighbors, _to_pgvector
+
+        source_emb = [0.1 * (i % 10 + 1) for i in range(512)]
+
+        # Simulate pgvector returning two rows: one with a real embedding,
+        # one with a zero embedding (old quick_save artifact)
+        real_repo_row = MagicMock()
+        real_repo_row._mapping = {
+            "id": 2001, "owner": "other", "name": "lib-a", "full_name": "other/lib-a",
+            "description": "A library", "language": "Python", "topics": ["python"],
+            "stars": 100, "dependencies": [], "trending_score": 0.0,
+            "embedding": [0.12 * (i % 10 + 1) for i in range(512)],
+            "description_embedding": [0.06 * (i % 10 + 1) for i in range(512)],
+            "cosine_sim": 0.85,
+        }
+        zero_repo_row = MagicMock()
+        zero_repo_row._mapping = {
+            "id": 2002, "owner": "junk", "name": "zero", "full_name": "junk/zero",
+            "description": "Has zero embedding", "language": "Python", "topics": [],
+            "stars": 0, "dependencies": [], "trending_score": 0.0,
+            "embedding": [0.0] * 512,
+            "description_embedding": None,
+            "cosine_sim": 0.99,  # pgvector's wrong answer for zero vectors
+        }
+
+        fake_session = MagicMock()
+        fake_session.execute = AsyncMock(return_value=MagicMock(
+            __iter__=lambda self: iter([real_repo_row, zero_repo_row]),
+        ))
+
+        result = await fetch_vector_neighbors(
+            fake_session, source_embedding=source_emb, exclude_id=1001, limit=150,
+        )
+
+        # The real candidate should be returned
+        assert 2001 in result
+        assert result[2001][1] == 0.85  # cosine_sim preserved
+
+        # The zero-embedding candidate must be SKIPPED, not returned with 0.99
+        assert 2002 not in result, (
+            "zero-embedding candidate was not skipped — this is the root cause "
+            "of the 'random results' bug"
+        )
+
+    def test_cosine_batch_returns_zero_for_zero_vectors(self):
+        """cosine_batch_one_vs_many must return 0.0 for pairs where
+        either vector is zero, not NaN."""
+        from reporelay_mvp.embedding import cosine_batch_one_vs_many
+
+        one = [0.1 * (i % 10 + 1) for i in range(512)]
+        many = [
+            [0.12 * (i % 10 + 1) for i in range(512)],  # real vector
+            [0.0] * 512,                                   # zero vector
+            [0.09 * (i % 10 + 1) for i in range(512)],  # real vector
+        ]
+
+        scores = cosine_batch_one_vs_many(one, many)
+        assert len(scores) == 3
+        assert scores[0] > 0.0, "real vector should have positive cosine sim"
+        assert scores[1] == 0.0, "zero vector should have 0.0 cosine sim, not NaN"
+        assert scores[2] > 0.0, "real vector should have positive cosine sim"
+        # No NaN in any score
+        for i, s in enumerate(scores):
+            assert s == s, f"score[{i}] is NaN"
+
+    def test_cosine_batch_returns_zero_for_nan_vectors(self):
+        from reporelay_mvp.embedding import cosine_batch_one_vs_many
+
+        one = [0.1 * (i % 10 + 1) for i in range(512)]
+        nan_vec = [0.1] * 512
+        nan_vec[100] = float("nan")
+        many = [nan_vec]
+
+        scores = cosine_batch_one_vs_many(one, many)
+        assert scores[0] == 0.0, "NaN vector should have 0.0 cosine sim"
+        assert scores[0] == scores[0], "score must not be NaN"
+
+    @pytest.mark.asyncio
+    async def test_score_many_zero_candidate_gets_zero_cosine(self):
+        """When a candidate has a zero embedding, its cosine_sim feature
+        must be 0.0, not some inflated number from the NEUTRAL_SIM default."""
+        source = _make_source_repo(
+            description="A widget library",
+            embedding=[0.1 * (i % 10 + 1) for i in range(512)],
+            description_embedding=[0.05 * (i % 10 + 1) for i in range(512)],
+        )
+        # This candidate has NEUTRAL_SIM = 0.5 from the SQL pool
+        # (no vector-based similarity). The score_many should use 0.5
+        # as the cosine_sim feature value — that's the SQL-only default.
+        sql_only_cand = _make_candidate_repo(
+            3001, "sql-only", "repo",
+            embedding=None,  # no embedding in DB
+            description_embedding=None,
+        )
+
+        fake_session = MagicMock()
+
+        async def fake_get_desc_batch(session, ids):
+            return {}  # no description embeddings available
+
+        with patch.object(data, "get_description_embeddings_batch", fake_get_desc_batch):
+            scored = await score_many(
+                source, [(sql_only_cand, 0.5)],
+                session=fake_session,
+                source_readme_tokens={"widget", "python"},
+            )
+
+        assert len(scored) == 1
+        _, score, features = scored[0]
+        # The SQL-only candidate should NOT get a high cosine_sim
+        # (it has no embedding to compare against)
+        assert features.cosine_sim == 0.5, (
+            f"SQL-only candidate got cosine_sim={features.cosine_sim}, "
+            "expected NEUTRAL_SIM=0.5"
+        )
+        # Its description_cosine_sim should be 0.0 (no description embedding)
+        assert features.description_cosine_sim == 0.0
+
+    @pytest.mark.asyncio
+    async def test_similar_repos_score_higher_than_different(self):
+        """End-to-end: a candidate whose README embedding is close to
+        the source's must score higher than one whose embedding is far
+        away. This is the fundamental correctness guarantee."""
+        source_emb = [0.2 * (i % 10 + 1) for i in range(512)]
+        source = _make_source_repo(
+            description="A Python ML library",
+            embedding=source_emb,
+            description_embedding=[0.1 * (i % 10 + 1) for i in range(512)],
+        )
+
+        # Very similar embedding (slight perturbation)
+        similar = _make_candidate_repo(
+            4001, "similar", "ml-lib",
+            embedding=[0.2 * (i % 10 + 1) + 0.001 * (i % 3) for i in range(512)],
+            description_embedding=[0.1 * (i % 10 + 1) + 0.001 for i in range(512)],
+            topics=["python", "machine-learning"],
+        )
+        # Very different embedding (different direction in vector space)
+        different = _make_candidate_repo(
+            4002, "different", "web-framework",
+            embedding=[-0.1 * (i % 10 + 1) for i in range(512)],
+            description_embedding=[-0.05 * (i % 10 + 1) for i in range(512)],
+            topics=["python", "web"],
+        )
+
+        fake_session = MagicMock()
+
+        async def fake_get_desc_batch(session, ids):
+            return {
+                similar.id: similar.description_embedding,
+                different.id: different.description_embedding,
+            }
+
+        with patch.object(data, "get_description_embeddings_batch", fake_get_desc_batch):
+            scored = await score_many(
+                source,
+                [(similar, 0.9), (different, 0.1)],
+                session=fake_session,
+                source_readme_tokens={"python", "ml", "library", "data"},
+            )
+
+        scores = {r.name: s for r, s, _ in scored}
+        assert scores["ml-lib"] > scores["web-framework"], (
+            f"similar ml-lib ({scores['ml-lib']:.4f}) should score higher than "
+            f"different web-framework ({scores['web-framework']:.4f})"
+        )
+        # The gap should be meaningful, not just noise
+        gap = scores["ml-lib"] - scores["web-framework"]
+        assert gap > 0.05, (
+            f"score gap ({gap:.4f}) is too small — the embedding comparison "
+            "is not producing meaningful differentiation"
         )

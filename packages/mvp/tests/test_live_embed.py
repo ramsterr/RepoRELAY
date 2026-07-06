@@ -281,7 +281,7 @@ async def test_embed_source_live_raises_on_zero_vector_response():
         with patch.object(r, "fetch_readme", AsyncMock(return_value=readme)):
             with patch.object(r, "fetch_dependencies", AsyncMock(return_value=[])):
                 with patch.object(r, "embed_text", AsyncMock(return_value=[0.0] * 512)):
-                    with pytest.raises(EmbedError, match="zero vector"):
+                    with pytest.raises(EmbedError, match="zero/NaN vector"):
                         await _embed_source_live(source, "x", "y", fake_session)
 
 

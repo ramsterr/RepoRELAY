@@ -188,17 +188,13 @@ async def score_many(
 
     Returns (repo, score, features) tuples for downstream use.
     """
+    from reporelay_mvp.data import is_real_vector
+
     use_tags = bool(tags)
     rng = random.Random(seed) if seed is not None else None
 
-    source_has_readme_emb = (
-        source.embedding is not None
-        and any(v != 0.0 for v in source.embedding)
-    )
-    source_has_desc_emb = (
-        source.description_embedding is not None
-        and any(v != 0.0 for v in source.description_embedding)
-    )
+    source_has_readme_emb = is_real_vector(source.embedding)
+    source_has_desc_emb = is_real_vector(source.description_embedding)
 
     embeddings: dict[int, list[float]] = {}
     fc_by_id: dict[int, float] = {}
@@ -213,6 +209,8 @@ async def score_many(
     if source_has_desc_emb:
         candidate_ids = [c.id for c, _ in candidates]
         desc_embs = await data.get_description_embeddings_batch(session, candidate_ids)
+        # Filter out zero/NaN description embeddings
+        desc_embs = {cid: emb for cid, emb in desc_embs.items() if is_real_vector(emb)}
         if desc_embs:
             ids_ordered = [c.id for c, _ in candidates if c.id in desc_embs]
             vecs_ordered = [desc_embs[cid] for cid in ids_ordered]
@@ -223,6 +221,8 @@ async def score_many(
         candidate_ids = [c.id for c, _ in candidates]
         if candidate_ids:
             embeddings = await data.get_embeddings_batch(session, candidate_ids)
+        # Filter out zero/NaN embeddings
+        embeddings = {cid: emb for cid, emb in embeddings.items() if is_real_vector(emb)}
         if embeddings:
             ids_ordered = [c.id for c, _ in candidates if c.id in embeddings]
             vecs_ordered = [embeddings[cid] for cid in ids_ordered]

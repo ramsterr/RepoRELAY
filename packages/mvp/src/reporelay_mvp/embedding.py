@@ -479,7 +479,13 @@ def cosine(a: list[float], b: list[float]) -> float:
 
 
 def cosine_batch_one_vs_many(one: list[float], many: list[list[float]]) -> list[float]:
-    """Vectorized cosine similarity: one vector against N vectors."""
+    """Vectorized cosine similarity: one vector against N vectors.
+
+    Returns 0.0 for any pair where either vector is zero or has a
+    near-zero norm. This prevents NaN from propagating into the scorer
+    when a candidate's embedding is degenerate (e.g. old quick_save
+    zero-vectors that slipped through the DB filter).
+    """
     if not many:
         return []
     n = np.asarray(many, dtype=np.float32)
@@ -488,4 +494,6 @@ def cosine_batch_one_vs_many(one: list[float], many: list[list[float]]) -> list[
     norms = np.linalg.norm(n, axis=1) * float(np.linalg.norm(o))
     with np.errstate(divide="ignore", invalid="ignore"):
         result = np.where(norms > 1e-9, dot / norms, 0.0)
+    # Replace any remaining NaN/Inf (shouldn't happen, but defensive)
+    result = np.where(np.isfinite(result), result, 0.0)
     return [float(x) for x in result.tolist()]

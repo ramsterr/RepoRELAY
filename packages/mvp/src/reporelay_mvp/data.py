@@ -8,6 +8,7 @@ no co-star counts, no materialized views.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from sqlalchemy import text
@@ -16,10 +17,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from reporelay_mvp.db import _get_sessionmaker
 from reporelay_mvp.models import Repo
 
+logger = logging.getLogger(__name__)
+
 EXPECTED_COLUMNS = (
     "id, owner, name, full_name, description, language, topics, stars, "
     "dependencies, trending_score, embedding, description_embedding"
 )
+
+
+def is_real_vector(vec: list[float] | None) -> bool:
+    """Return True if vec is a non-zero, NaN-free, Inf-free embedding.
+
+    This is the canonical "do we have a usable embedding?" check.
+    Used before storing, before querying, and as a defensive guard in
+    score_many so we never compute meaningless cosine distances.
+    """
+    if vec is None or len(vec) == 0:
+        return False
+    for x in vec:
+        f = float(x)
+        if f != f:  # NaN
+            return False
+        if f == float("inf") or f == float("-inf"):
+            return False
+    return any(float(x) != 0.0 for x in vec)
 
 
 def _row_to_repo(row: Any) -> Repo:
@@ -247,6 +268,10 @@ async def set_embedding(
     repo_id: int,
     embedding: list[float],
 ) -> None:
+    if not is_real_vector(embedding):
+        raise ValueError(
+            f"refusing to store a zero/NaN embedding for repo_id={repo_id}"
+        )
     await session.execute(
         text(
             """
@@ -351,6 +376,10 @@ async def set_description_embedding(
     repo_id: int,
     description_embedding: list[float],
 ) -> None:
+    if not is_real_vector(description_embedding):
+        raise ValueError(
+            f"refusing to store a zero/NaN description_embedding for repo_id={repo_id}"
+        )
     await session.execute(
         text(
             """
@@ -547,10 +576,29 @@ async def fetch_vector_neighbors(
         },
     )
     result: dict[int, tuple[Repo, float]] = {}
+    skipped_zero = 0
     for row in rows:
         repo = _row_to_repo(row)
+        # Guard: skip candidates whose embedding is all zeros.
+        # Old quick_save wrote [0.0]*512 for repos that haven't been
+        # embedded yet — these pass `embedding IS NOT NULL` in SQL
+        # but produce meaningless cosine distances (pgvector returns
+        # ≈1.0 for zero-vectors, making them look like perfect matches).
+        if not is_real_vector(repo.embedding):
+            skipped_zero += 1
+            continue
         sim = float(row._mapping["cosine_sim"])
+        # Final safety: clamp cosine similarity to [0, 1].  pgvector
+        # can return values slightly outside this range for degenerate
+        # vectors (e.g. very small norms).  We want features to stay
+        # in [0, 1] so the weighted scorer behaves predictably.
+        sim = max(0.0, min(1.0, sim))
         result[repo.id] = (repo, sim)
+    if skipped_zero:
+        logger.info(
+            "fetch_vector_neighbors: skipped %d candidates with zero embeddings",
+            skipped_zero,
+        )
     return result
 
 
@@ -560,5 +608,20 @@ def _to_pgvector(vec: list[float]) -> str:
 
     Using a parameter keeps the query plan stable and lets us use the
     HNSW index. We cast in SQL via CAST(... AS vector).
+
+    Raises ValueError for empty, NaN, or all-zero vectors — these would
+    produce meaningless cosine distances.
     """
-    return "[" + ",".join(repr(float(x)) for x in vec) + "]"
+    if not vec:
+        raise ValueError("embedding vector is empty")
+    cleaned: list[str] = []
+    for x in vec:
+        f = float(x)
+        if f != f:  # NaN check
+            raise ValueError("embedding vector contains NaN")
+        if f == float("inf") or f == float("-inf"):
+            raise ValueError("embedding vector contains Inf")
+        cleaned.append(repr(f))
+    if all(float(x) == 0.0 for x in vec):
+        raise ValueError("embedding vector is all zeros — cannot compute cosine distance")
+    return "[" + ",".join(cleaned) + "]"

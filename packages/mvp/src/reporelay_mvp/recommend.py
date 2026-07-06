@@ -426,13 +426,22 @@ async def recommend(
                 if desc_text and desc_text.strip():
                     query_parts.append(desc_text.strip())
 
-                # Priority 2: Repo name tokens (the differentiating signal)
-                name_tokens = full_name.lower().replace("/", " ").replace("-", " ").replace("_", " ").replace(".", " ").split()
-                # Filter out generic name tokens
-                generic_names = {"ossu", "awesome", "list", "collection", "repo", "course", "courses", "curriculum", "guide", "project", "tool", "library", "framework", "app", "api", "data", "code", "src", "main", "test", "docs", "master", "main", "dev", "prod", "v1", "v2"}
-                name_tokens = [t for t in name_tokens if t not in generic_names and len(t) > 1]
+                # Priority 2: Repo name tokens (differentiating signal)
+                # Only include tokens that look like real technical/domain terms.
+                # Skip: owner names, ≤3 chars, common non-descriptive repo names.
+                name_tokens = name.lower().replace("-", " ").replace("_", " ").replace(".", " ").split()
+                _generic_repo_names = {
+                    "ossu", "awesome", "list", "collection", "repo", "course", "courses",
+                    "curriculum", "guide", "project", "tool", "library", "framework", "app", "api",
+                    "data", "code", "src", "main", "test", "docs", "master", "dev", "prod",
+                    "v1", "v2", "v3", "go", "py", "js", "ts", "rs", "rb", "cpp", "cc",
+                    "example", "demo", "sample", "tutorial", "learn", "learning",
+                    "starter", "template", "boilerplate", "scaffold", "cookiecutter",
+                    "dotfiles", "config", "setup", "install", "build", "deploy",
+                }
+                name_tokens = [t for t in name_tokens if t not in _generic_repo_names and len(t) >= 4]
                 if name_tokens:
-                    query_parts.append(" ".join(name_tokens))
+                    query_parts.append(" ".join(name_tokens[:5]))
 
                 # Priority 3: Top distinctive keywords
                 if keywords:

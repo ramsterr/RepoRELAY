@@ -57,24 +57,6 @@ try:
     )
 except ImportError:
     pass
-try:
-    from voyageai.error import (
-        APIConnectionError,
-    )
-    from voyageai.error import (
-        RateLimitError as VoyageRateLimitError,
-    )
-    from voyageai.error import (
-        ServiceUnavailableError as VoyageServiceUnavailable,
-    )
-    _RETRYABLE_EXCEPTIONS = (
-        VoyageRateLimitError,
-        APIConnectionError,
-        VoyageServiceUnavailable,
-        *_RETRYABLE_EXCEPTIONS,
-    )
-except ImportError:
-    pass
 
 
 @retry(
@@ -127,29 +109,6 @@ async def _embed_batch_gemini(texts: list[str], task_type: str) -> list[list[flo
             output_dimensionality=512,
         )
         return [[float(x) for x in emb] for emb in result["embedding"]]
-
-    return await asyncio.to_thread(_call)
-
-
-async def _embed_batch_cohere(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts via Cohere's batch API (500 RPM trial)."""
-    import cohere
-
-    from reporelay_mvp.settings import get_mvp_settings
-
-    settings = get_mvp_settings()
-    api_key = settings.cohere_api_key
-    client = cohere.ClientV2(api_key=api_key)
-
-    def _call() -> list[list[float]]:
-        result = client.embed(
-            model="embed-v4.0",
-            texts=texts,
-            input_type="search_document",
-            embedding_types=["float"],
-            output_dimension=512,
-        )
-        return [[float(x) for x in vec] for vec in result.embeddings.float_]
 
     return await asyncio.to_thread(_call)
 

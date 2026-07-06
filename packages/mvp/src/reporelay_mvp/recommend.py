@@ -352,13 +352,7 @@ async def recommend(
                 source, candidates, seed=seed, tags=tags,
                 filter_embedding=filter_emb, source_readme_tokens=None,
             )
-            final = rerank(source, scored, limit=limit, seed=seed)
-            cosine_lookup = _build_cosine_lookup(candidates)
-            scored_repos = []
-            for repo, sc, features in final:
-                cs = cosine_lookup.get(repo.id, 0.0)
-                scored_repos.append(_build_scored_repo(source, repo, sc, cs, features=features))
-            result = ScoredRecommendation(source_repo=full_name, repos=scored_repos)
+            result = categorize_results(source, scored, limit, seed)
             return result
         finally:
             await session.close()
@@ -1181,15 +1175,8 @@ async def recommend_random(
         candidates = await _expand_pool(session, source, seed=seed)
 
         scored = await score_many(source, candidates, seed=seed)
-        final = rerank(source, scored, limit=limit, seed=seed)
-
-        cosine_lookup = _build_cosine_lookup(candidates)
-        scored_repos: list[ScoredRepo] = []
-        for repo, sc, features in final:
-            cosine_sim = cosine_lookup.get(repo.id, 0.0)
-            scored_repos.append(_build_scored_repo(source, repo, sc, cosine_sim, features=features))
-
-        return ScoredRecommendation(source_repo=source.full_name, repos=scored_repos)
+        result = categorize_results(source, scored, limit, seed)
+        return result
     finally:
         await session.close()
 

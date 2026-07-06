@@ -311,10 +311,10 @@ class TestWeightRebalancing:
         assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9
         assert abs(sum(TAG_WEIGHTS.values()) - 1.0) < 1e-9
 
-    def test_description_cosine_sim_is_dominant(self):
+    def test_cosine_sim_is_primary_signal(self):
         from reporelay_mvp.score import WEIGHTS
-        # description_cosine_sim should be the highest single feature
-        assert WEIGHTS["description_cosine_sim"] >= max(v for k, v in WEIGHTS.items() if k != "description_cosine_sim")
+        # cosine_sim (README embedding) should be the highest single feature
+        assert WEIGHTS["cosine_sim"] >= max(v for k, v in WEIGHTS.items() if k != "cosine_sim")
 
     def test_readme_topic_sim_is_enabled(self):
         from reporelay_mvp.score import WEIGHTS

@@ -33,32 +33,34 @@ from reporelay_mvp.models import Features, Repo
 logger = logging.getLogger(__name__)
 
 WEIGHTS: dict[str, float] = {
-    "language_match":          0.04,
-    "topic_overlap":           0.13,
-    "cosine_sim":              0.10,
-    "description_sim":         0.04,
-    "description_cosine_sim":  0.29,
-    "readme_topic_sim":        0.20,
-    "dep_overlap":             0.08,
-    "popularity_sim":          0.02,
+    "language_match":          0.03,
+    "topic_overlap":           0.10,
+    "cosine_sim":              0.22,
+    "description_sim":         0.03,
+    "description_cosine_sim":  0.20,
+    "readme_topic_sim":        0.18,
+    "dep_overlap":             0.07,
+    "popularity_sim":          0.03,
+    "star_ratio":              0.04,
     "trending_boost":          0.02,
     "quality_signal":          0.03,
     "language_diversity":      0.05,
 }
 
 TAG_WEIGHTS: dict[str, float] = {
-    "language_match":          0.03,
-    "topic_overlap":           0.07,
-    "cosine_sim":              0.08,
-    "description_sim":         0.03,
-    "description_cosine_sim":  0.22,
-    "readme_topic_sim":        0.14,
+    "language_match":          0.02,
+    "topic_overlap":           0.06,
+    "cosine_sim":              0.17,
+    "description_sim":         0.02,
+    "description_cosine_sim":  0.15,
+    "readme_topic_sim":        0.12,
     "filter_cosine_sim":       0.25,
-    "dep_overlap":             0.06,
+    "dep_overlap":             0.05,
     "popularity_sim":          0.02,
-    "trending_boost":          0.03,
-    "quality_signal":          0.03,
-    "language_diversity":      0.04,
+    "star_ratio":              0.03,
+    "trending_boost":          0.02,
+    "quality_signal":          0.02,
+    "language_diversity":      0.07,
 }
 
 

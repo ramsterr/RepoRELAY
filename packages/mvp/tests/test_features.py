@@ -80,11 +80,12 @@ def test_tag_match_empty():
 
 
 def test_quality_signal_empty():
-    assert _quality_signal(_repo()) == 0.2
+    # Empty repo: no description, no topics, no deps, no language, no embedding
+    assert _quality_signal(_repo()) == 0.1
 
 
 def test_quality_signal_has_language():
-    assert math.isclose(_quality_signal(_repo(language="Python")), 0.3)
+    assert math.isclose(_quality_signal(_repo(language="Python")), 0.2)
 
 
 def test_quality_signal_well_documented():
@@ -93,6 +94,7 @@ def test_quality_signal_well_documented():
         language="Python",
         topics=["web", "framework", "api"],
         dependencies=["a", "b", "c", "d", "e", "f"],
+        embedding=[0.1] * 384,
     )
     assert math.isclose(_quality_signal(r), 1.0)
 

@@ -72,7 +72,11 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     var fetchOpts = controller ? { signal: controller.signal } : {};
     return fetch(url, fetchOpts).then(function (res) {
       clearTimeout(timeoutId); if (slowId) clearTimeout(slowId);
-      if (!res.ok) return res.text().then(function () { throw new Error("API " + res.status); });
+      if (!res.ok) return res.text().then(function (body) {
+        var detail = "";
+        try { detail = JSON.parse(body).detail || ""; } catch (e) {}
+        throw new Error(detail || ("API " + res.status));
+      });
       return res.text().then(function (text) {
         var data; try { data = JSON.parse(text); } catch (e) { throw new Error("non-JSON response"); }
         var entry = { data: data, ts: now }; _fc[url] = entry;
@@ -202,15 +206,20 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     resultsEl.innerHTML = '<div class="loading" id="results-loading">searching for similar repos...</div>';
 
     cachedFetchWithRetry(API + "/recommend?" + params, {
+      // First request for a new repo can take 30-50s (GitHub + Gemini
+      // embed). Use a 60s timeout so the backend has room to finish
+      // and return a real error instead of us aborting prematurely.
+      timeout: 60000,
       onSlow: function () {
         var el = document.getElementById("results-loading");
-        if (el) el.textContent = "still searching... (cold start can take a few seconds)";
+        if (el) el.innerHTML = 'embedding repo via Gemini API...<br><span style="font-size:0.75rem;opacity:0.7">first visit takes ~20s while we fetch README + compute vectors</span>';
       },
-    }, 1)
+    }, 0)
       .then(function (data) {
         var repos = data.repos || [];
         var seedText = currentSeed !== undefined ? " (seed: " + currentSeed + ")" : "";
         var cacheText = data.from_cache ? "cached" : "live";
+        var embedInfo = data.embed_status || {};
         headerEl.textContent = repos.length + " recommendations" + seedText;
         cacheEl.textContent = cacheText;
         cacheEl.className = "cache-badge cache-" + (data.from_cache ? "hit" : "miss");
@@ -220,8 +229,19 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
       })
       .catch(function (e) {
         var msg = (e && e.message) || "failed to load";
+        var hint = "";
+        if (/timed out|timeout/i.test(msg)) {
+          hint = "The Gemini API may be slow. Try again in a minute.";
+        } else if (/embed/i.test(msg)) {
+          hint = "Could not compute embeddings. Check API key configuration.";
+        } else if (/API 502/.test(msg)) {
+          hint = "Upstream service error. The embedding API may be down.";
+        } else if (/API 404/.test(msg)) {
+          hint = "Repo not found. Check the owner/name format.";
+        }
         resultsEl.innerHTML =
-          '<div class="error">' + msg +
+          '<div class="error">' + esc(msg) +
+          (hint ? '<br><span style="font-size:0.8rem;opacity:0.7">' + esc(hint) + '</span>' : '') +
           '<br><button type="button" class="btn btn-outline" style="margin-top:0.75rem;font-size:0.75rem;padding:0.4rem 0.8rem;" id="retry-btn">retry</button>' +
           '</div>';
         var retryBtn = document.getElementById("retry-btn");

@@ -354,12 +354,23 @@ async def _embed_via_gemini(text_value: str) -> list[float]:
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
-            return await asyncio.to_thread(_call)
+            # Hard timeout: if the Gemini SDK hangs (network issue, DNS
+            # stall, server-side hang), we must not block the event loop
+            # forever. 30s is generous — typical response is 1-3s.
+            return await asyncio.wait_for(
+                asyncio.to_thread(_call),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            last_exc = RuntimeError(
+                f"Gemini embed timed out after 30s (attempt {attempt + 1}/3)"
+            )
+            logger.warning("Gemini embed attempt %d timed out", attempt + 1)
         except Exception as exc:
             last_exc = exc
-            # Brief backoff — 0.5s, 1s. Don't hammer the API on transient errors.
-            await asyncio.sleep(0.5 * (attempt + 1))
             logger.warning("Gemini embed attempt %d failed: %s", attempt + 1, exc)
+        # Brief backoff — 0.5s, 1s. Don't hammer the API on transient errors.
+        await asyncio.sleep(0.5 * (attempt + 1))
     raise RuntimeError(f"Gemini embed failed after 3 attempts: {last_exc}")
 
 

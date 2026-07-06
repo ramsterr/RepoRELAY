@@ -311,9 +311,16 @@ async def recommend(
         }
         if source_needs_embed:
             logger.info("repo %s has no real vectors — embedding live via Gemini", full_name)
-            source, source_readme_tokens, deps, embed_status = await _embed_source_live(
-                source, owner, name, session,
-            )
+            try:
+                source, source_readme_tokens, deps, embed_status = await asyncio.wait_for(
+                    _embed_source_live(source, owner, name, session),
+                    timeout=45.0,
+                )
+            except asyncio.TimeoutError:
+                raise EmbedError(
+                    f"embedding pipeline timed out for {full_name} after 45s — "
+                    "Gemini API may be slow or unreachable"
+                ) from None
             if deps:
                 source = source.model_copy(update={"dependencies": deps})
 
@@ -397,10 +404,18 @@ async def _embed_source_live(
     # 1. Fetch README + dependencies from GitHub
     try:
         async with _auth_client(settings.github_token) as client:
-            readme_text, deps = await asyncio.gather(
-                fetch_readme(client, owner, name),
-                fetch_dependencies(client, owner, name),
+            readme_text, deps = await asyncio.wait_for(
+                asyncio.gather(
+                    fetch_readme(client, owner, name),
+                    fetch_dependencies(client, owner, name),
+                ),
+                timeout=20.0,
             )
+    except asyncio.TimeoutError:
+        logger.error("GitHub fetch timed out for %s/%s after 20s", owner, name)
+        raise EmbedError(
+            f"GitHub API timed out fetching README for {owner}/{name}"
+        ) from None
     except Exception as exc:
         logger.exception("GitHub fetch failed for %s/%s", owner, name)
         raise EmbedError(

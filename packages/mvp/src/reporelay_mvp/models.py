@@ -69,6 +69,7 @@ class Features:
     readme_topic_sim: float = 0.0
     dep_overlap: float = 0.0
     popularity_sim: float = 0.0
+    star_ratio: float = 0.0
     trending_boost: float = 0.0
     filter_cosine_sim: float = 0.0
     quality_signal: float = 0.0
@@ -84,6 +85,7 @@ class Features:
             "readme_topic_sim": self.readme_topic_sim,
             "dep_overlap": self.dep_overlap,
             "popularity_sim": self.popularity_sim,
+            "star_ratio": self.star_ratio,
             "trending_boost": self.trending_boost,
             "filter_cosine_sim": self.filter_cosine_sim,
             "quality_signal": self.quality_signal,

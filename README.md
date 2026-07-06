@@ -17,7 +17,7 @@ No ML training. No user data. Postgres + pgvector + a pre-trained sentence-trans
 fastapi/fastapi  →  pallets/flask, django/django, psf/requests, encode/starlette ...
 ```
 
-Live: **[reporelay-site.vercel.app](https://repo-relay-olv2-jjloud2k5-rams-projects-3ee6f183.vercel.app/)** (frontend on Vercel, API on Render).
+Live: **[reporelay-site.vercel.app](https://repo-relay-olv2-fr39txizk-rams-projects-3ee6f183.vercel.app/)** (frontend on Vercel, API on Render).
 
 ---
 

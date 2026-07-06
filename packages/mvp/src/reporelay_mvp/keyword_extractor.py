@@ -121,6 +121,9 @@ def extract_keywords(
         # Skip UUIDs
         if len(token) > 30 and "-" in token and re.match(r"^[0-9a-f\-]{30,}$", token):
             continue
+        # Skip very long random-looking strings
+        if len(token) > 40 and re.match(r"^[a-zA-Z0-9\-_]{40,}$", token):
+            continue
         # Skip URLs
         if token.startswith(("http", "https", "www", "ftp")):
             continue

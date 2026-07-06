@@ -426,6 +426,7 @@ async def recommend(
                         source = source.model_copy(update={
                             "embedding": query_emb,
                             "description_embedding": query_emb,
+                            "keywords": keywords,
                         })
                         embed_status = {"desc_emb": "keyword", "readme_emb": "keyword"}
                         logger.info("  keyword semantic search active for %s (%d keywords)",

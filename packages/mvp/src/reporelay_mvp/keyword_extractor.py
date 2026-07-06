@@ -113,6 +113,11 @@ def extract_keywords(
         # Skip tokens that are just a version number pattern
         if re.match(r"^v?\d+(\.\d+)*$", token):
             continue
+        # Skip numeric/currency patterns (e.g., "199 mo", "499 mo", "$12")
+        if re.match(r"^\d{2,}\s*(mo|month|yr|year|week|day|hr|hour|min|sec)?$", token):
+            continue
+        if re.match(r"^\$\d+$", token):
+            continue
         # Skip UUIDs
         if len(token) > 30 and "-" in token and re.match(r"^[0-9a-f\-]{30,}$", token):
             continue

@@ -38,6 +38,7 @@ from reporelay_mvp.github import (
     fetch_all,
     fetch_dependencies,
     fetch_readme,
+    fetch_repo_metadata,
     search_repositories,
 )
 from reporelay_mvp.models import (
@@ -384,22 +385,67 @@ async def recommend(
         source_readme_tokens: set[str] | None = None
 
         if source_needs_embed:
-            # ── Proxy-first: borrow embedding from similar repo NOW ──────
-            # This gives instant pgvector results. Real embedding happens
-            # in the background so NEXT visit uses real vectors.
-            if not source_has_readme_emb:
-                proxy_emb = await _find_proxy_embedding(session, source)
-                if proxy_emb:
-                    source = source.model_copy(update={"embedding": proxy_emb})
-                    embed_status["readme_emb"] = "proxy"
-                    logger.info("  using proxy README embedding for %s", full_name)
+            # ── Keyword-based semantic search ──────────────────────────
+            # Instead of borrowing a proxy from a random topic-similar repo
+            # (which gives "python" repos for a "data science" repo just
+            # because they share the "python" topic), we extract keywords
+            # from the source's own description + README, embed those
+            # keywords as a query vector, and search against ALL 11k
+            # description embeddings already stored in the DB.
+            #
+            # This is fundamentally different from proxy:
+            #   - Proxy: "this repo is Python → find any Python repo"
+            #   - Keyword: "keywords are data science, education" →
+            #     find repos with description embeddings matching those concepts
 
-            if not source_has_desc_emb:
-                proxy_desc = await _find_desc_proxy_embedding(session, source)
-                if proxy_desc:
-                    source = source.model_copy(update={"description_embedding": proxy_desc})
-                    embed_status["desc_emb"] = "proxy"
-                    logger.info("  using proxy description embedding for %s", full_name)
+            # 1. Fetch README to extract keywords
+            try:
+                settings = get_mvp_settings()
+                async with _auth_client(settings.github_token) as client:
+                    readme_text = await fetch_readme(client, owner, name)
+                    meta = await fetch_repo_metadata(client, owner, name)
+                desc_text = meta.get("description", "") or source.description or ""
+                if readme_text and readme_text.strip():
+                    from reporelay_mvp.keyword_extractor import extract_keywords_from_repo
+                    keywords = extract_keywords_from_repo(desc_text, readme_text)
+                elif desc_text:
+                    from reporelay_mvp.keyword_extractor import extract_keywords
+                    keywords = extract_keywords(desc_text)
+                else:
+                    keywords = []
+
+                if keywords:
+                    # Build query: "data science education curriculum"
+                    query_text = " ".join(keywords[:20])
+                    logger.info("  keyword query for %s: %s", full_name, query_text[:120])
+
+                    # 2. Embed the keywords as a single query vector
+                    # One Gemini call instead of two — fast!
+                    query_emb = await embed_text(query_text)
+                    if is_real_vector(query_emb):
+                        source = source.model_copy(update={
+                            "embedding": query_emb,
+                            "description_embedding": query_emb,
+                        })
+                        embed_status = {"desc_emb": "keyword", "readme_emb": "keyword"}
+                        logger.info("  keyword semantic search active for %s (%d keywords)",
+                                    full_name, len(keywords))
+            except Exception as exc:
+                logger.warning("  keyword extraction failed for %s: %s", full_name, exc)
+
+            # ── Fallback to proxy if keyword extraction failed ──────────
+            if not is_real_vector(source.description_embedding) and not is_real_vector(source.embedding):
+                if not source_has_readme_emb:
+                    proxy_emb = await _find_proxy_embedding(session, source)
+                    if proxy_emb:
+                        source = source.model_copy(update={"embedding": proxy_emb})
+                        embed_status["readme_emb"] = "proxy"
+
+                if not source_has_desc_emb:
+                    proxy_desc = await _find_desc_proxy_embedding(session, source)
+                    if proxy_desc:
+                        source = source.model_copy(update={"description_embedding": proxy_desc})
+                        embed_status["desc_emb"] = "proxy"
 
             # ── Background: launch real Gemini embed for next visit ───────
             _bg_owner, _bg_name = owner, name

@@ -156,31 +156,73 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   function esc(s) { return (s || "").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
   // ── render ───────────────────────────────────────────────────────
+  function renderRepoCard(r) {
+    var idx = pickedRepos.indexOf(r.full_name);
+    var checked = idx !== -1;
+    var otherTopics = (r.topics || []).filter(function (t) { return (r.shared_topics || []).indexOf(t) === -1; }).slice(0, 3);
+    return '<div class="card' + (checked ? " card-picked" : "") + '" data-repo="' + r.full_name + '">' +
+      '<label class="card-check"><input type="checkbox"' + (checked ? " checked" : "") + ' data-repo="' + r.full_name + '" /></label>' +
+      '<div class="card-top">' +
+      '<a class="card-repo" href="https://github.com/' + r.full_name + '" target="_blank" rel="noopener">' + r.full_name + '</a>' +
+      '<span class="stars">' + fmt(r.stars) + ' \u2605</span>' +
+      '</div>' +
+      '<div class="card-desc">' + (esc(r.description || "") || "(no description)") + '</div>' +
+      '<div class="card-meta">' +
+      '<span class="score-dot ' + scoreColor(r.score) + '"></span>' +
+      '<span class="badge badge-lang" style="font-size:0.65rem;">' + matchLabel(r.features) + '</span>';
+  }
+
+  function renderRepoFooter(r) {
+    var html = '';
+    if (r.shared_language) html += '<span class="badge badge-shared-lang">' + r.language + '</span>';
+    if (r.shared_topics && r.shared_topics.length > 0) html += '<span class="badge badge-shared-topics">' + r.shared_topics.join(", ") + '</span>';
+    if (r.language && !r.shared_language) html += '<span class="badge badge-lang">' + r.language + '</span>';
+    var otherTopics = (r.topics || []).filter(function (t) { return (r.shared_topics || []).indexOf(t) === -1; }).slice(0, 3);
+    for (var j = 0; j < otherTopics.length; j++) {
+      html += '<span class="pill">' + otherTopics[j] + '</span>';
+    }
+    return html;
+  }
+
   function renderResults(repos) {
     var html = "";
     for (var i = 0; i < repos.length; i++) {
-      var r = repos[i];
-      var idx = pickedRepos.indexOf(r.full_name);
-      var checked = idx !== -1;
-      var otherTopics = (r.topics || []).filter(function (t) { return (r.shared_topics || []).indexOf(t) === -1; }).slice(0, 3);
-      html +=
-        '<div class="card' + (checked ? " card-picked" : "") + '" data-repo="' + r.full_name + '">' +
-        '<label class="card-check"><input type="checkbox"' + (checked ? " checked" : "") + ' data-repo="' + r.full_name + '" /></label>' +
-        '<div class="card-top">' +
-        '<a class="card-repo" href="https://github.com/' + r.full_name + '" target="_blank" rel="noopener">' + r.full_name + '</a>' +
-        '<span class="stars">' + fmt(r.stars) + ' \u2605</span>' +
-        '</div>' +
-        '<div class="card-desc">' + esc(r.description || "") || "(no description)" + '</div>' +
-        '<div class="card-meta">' +
-        '<span class="score-dot ' + scoreColor(r.score) + '"></span>' +
-        '<span class="badge badge-lang" style="font-size:0.65rem;">' + matchLabel(r.features) + '</span>';
-      if (r.shared_language) html += '<span class="badge badge-shared-lang">' + r.language + '</span>';
-      if (r.shared_topics && r.shared_topics.length > 0) html += '<span class="badge badge-shared-topics">' + r.shared_topics.join(", ") + '</span>';
-      if (r.language && !r.shared_language) html += '<span class="badge badge-lang">' + r.language + '</span>';
-      for (var j = 0; j < otherTopics.length; j++) {
-        html += '<span class="pill">' + otherTopics[j] + '</span>';
+      html += renderRepoCard(repos[i]) + renderRepoFooter(repos[i]) + '</div></div>';
+    }
+    return html;
+  }
+
+  function renderGroups(groups) {
+    var html = "";
+    for (var g = 0; g < groups.length; g++) {
+      var group = groups[g];
+      html += '<div class="group-section">' +
+        '<h3 class="group-label">' + group.label +
+        ' <span class="group-signal">(' + group.signal + ')</span></h3>';
+      for (var i = 0; i < group.repos.length; i++) {
+        var r = group.repos[i];
+        var idx = pickedRepos.indexOf(r.full_name);
+        var checked = idx !== -1;
+        html += '<div class="card' + (checked ? " card-picked" : "") + '" data-repo="' + r.full_name + '">' +
+          '<label class="card-check"><input type="checkbox"' + (checked ? " checked" : "") + ' data-repo="' + r.full_name + '" /></label>' +
+          '<div class="card-top">' +
+          '<a class="card-repo" href="https://github.com/' + r.full_name + '" target="_blank" rel="noopener">' + r.full_name + '</a>' +
+          '<span class="stars">' + fmt(r.stars) + ' \u2605</span>' +
+          '</div>' +
+          '<div class="card-desc">' + (esc(r.description || "") || "(no description)") + '</div>' +
+          '<div class="card-meta">' +
+          '<span class="score-dot ' + scoreColor(r.score) + '"></span>' +
+          '<span class="badge badge-lang" style="font-size:0.65rem;">' + matchLabel(r.features) + '</span>';
+        if (r.shared_language) html += '<span class="badge badge-shared-lang">' + r.language + '</span>';
+        if (r.shared_topics && r.shared_topics.length > 0) html += '<span class="badge badge-shared-topics">' + r.shared_topics.join(", ") + '</span>';
+        if (r.language && !r.shared_language) html += '<span class="badge badge-lang">' + r.language + '</span>';
+        var otherTopics = (r.topics || []).filter(function (t) { return (r.shared_topics || []).indexOf(t) === -1; }).slice(0, 3);
+        for (var j = 0; j < otherTopics.length; j++) {
+          html += '<span class="pill">' + otherTopics[j] + '</span>';
+        }
+        html += '</div></div>';
       }
-      html += '</div></div>';
+      html += '</div>';
     }
     return html;
   }
@@ -206,25 +248,23 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     resultsEl.innerHTML = '<div class="loading" id="results-loading">searching for similar repos...</div>';
 
     cachedFetchWithRetry(API + "/recommend?" + params, {
-      // First request for a new repo can take 30-50s (GitHub + Gemini
-      // embed). Use a 60s timeout so the backend has room to finish
-      // and return a real error instead of us aborting prematurely.
       timeout: 60000,
       onSlow: function () {
         var el = document.getElementById("results-loading");
-        if (el) el.innerHTML = 'embedding repo via Gemini API...<br><span style="font-size:0.75rem;opacity:0.7">first visit takes ~20s while we fetch README + compute vectors</span>';
+        if (el) el.innerHTML = 'embedding repo via Gemini API...<br><span style="font-size:0.75rem;opacity:0.7">first visit takes ~7s while we fetch README + compute vectors</span>';
       },
     }, 0)
       .then(function (data) {
-        var repos = data.repos || [];
+        var groups = data.groups || [];
+        var repos = data.flat_repos || data.repos || [];
+        var total = repos.length;
         var seedText = currentSeed !== undefined ? " (seed: " + currentSeed + ")" : "";
         var cacheText = data.from_cache ? "cached" : "live";
-        var embedInfo = data.embed_status || {};
-        headerEl.textContent = repos.length + " recommendations" + seedText;
+        headerEl.textContent = total + " recommendations in " + groups.length + " categories" + seedText;
         cacheEl.textContent = cacheText;
         cacheEl.className = "cache-badge cache-" + (data.from_cache ? "hit" : "miss");
         cacheEl.style.display = "inline-block";
-        resultsEl.innerHTML = renderResults(repos);
+        resultsEl.innerHTML = groups.length > 0 ? renderGroups(groups) : renderResults(repos);
         bindCheckboxes();
       })
       .catch(function (e) {
@@ -402,4 +442,7 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   .card:hover .card-check,.card-picked .card-check { opacity: 1; }
   .card-check input[type=checkbox] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); cursor: pointer; }
   .card-picked { border-color: var(--accent) !important; box-shadow: 0 0 0 1px var(--accent), 0 4px 16px rgba(57, 211, 83, 0.15); }
+  .group-section { margin-bottom: 2rem; }
+  .group-label { font-size: 0.9rem; font-weight: 600; color: var(--accent, #58a6ff); margin-bottom: 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border, #30363d); }
+  .group-signal { font-weight: 400; font-size: 0.7rem; opacity: 0.6; }
 </style>

@@ -172,7 +172,7 @@ async def score_many(
     source: Repo,
     candidates: list[tuple[Repo, float]],
     *,
-    session: AsyncSession,
+    session: AsyncSession | None = None,
     seed: int | None = None,
     tags: list[str] | None = None,
     filter_embedding: list[float] | None = None,
@@ -181,16 +181,10 @@ async def score_many(
     """
     Score all candidates against the source repo.
 
-    When `filter_embedding` is provided (embedding of the tag filter
-    text), the batch fetch of candidate embeddings is done and
-    filter_cosine_sim is computed per candidate. This gives semantic
-    tag filtering — the tag text becomes a vector query.
-
-    When `source_readme_tokens` is provided, a readme_topic_sim
-    feature is computed per candidate by Jaccard-matching the source's
-    README tokens against each candidate's description tokens.
-
-    Returns (repo, score, features) tuples for downstream use.
+    All candidate embeddings (description_embedding, embedding) are read
+    from the candidate Repo objects already in memory — no DB roundtrips.
+    This is critical for remote databases (Neon) where each query costs
+    0.5-2s of network latency.
     """
     from reporelay_mvp.data import is_real_vector
 
@@ -208,43 +202,41 @@ async def score_many(
         for cand, _ in candidates:
             fc_by_id[cand.id] = _tag_match(tags, cand.topics)
 
-    # Description embeddings — compute cosine for source's description vs candidates
+    # Description embeddings — compute cosine for source's description vs candidates.
+    # The candidates already have description_embedding in memory (fetched as
+    # part of EXPECTED_COLUMNS in the candidate query). No need for a second
+    # DB roundtrip.
     desc_cosine_by_id: dict[int, float] = {}
     if source_has_desc_emb:
-        candidate_ids = [c.id for c, _ in candidates]
-        desc_embs = await data.get_description_embeddings_batch(session, candidate_ids)
-        # Filter out zero/NaN description embeddings
-        desc_embs = {cid: emb for cid, emb in desc_embs.items() if is_real_vector(emb)}
-        if desc_embs:
-            ids_ordered = [c.id for c, _ in candidates if c.id in desc_embs]
-            vecs_ordered = [desc_embs[cid] for cid in ids_ordered]
+        ids_ordered = []
+        vecs_ordered = []
+        for cand, _ in candidates:
+            if is_real_vector(cand.description_embedding):
+                ids_ordered.append(cand.id)
+                vecs_ordered.append(cand.description_embedding)
+        if vecs_ordered:
             scores = cosine_batch_one_vs_many(source.description_embedding, vecs_ordered)
             desc_cosine_by_id = dict(zip(ids_ordered, scores, strict=True))
 
     # Cross-modal: source README vs candidate descriptions.
-    # Most DB repos have description_embedding but not embedding (README).
-    # The source's README is the richest signal — compare it against the
-    # most available vector in the corpus (description embeddings).
+    # Reuses the same in-memory vectors — no extra DB call.
     readme_vs_desc_by_id: dict[int, float] = {}
-    if source_has_readme_emb:
-        # Reuse the desc_embs we already fetched (same batch)
-        if desc_embs:
-            ids_ordered = [c.id for c, _ in candidates if c.id in desc_embs]
-            vecs_ordered = [desc_embs[cid] for cid in ids_ordered]
-            scores = cosine_batch_one_vs_many(source.embedding, vecs_ordered)
-            readme_vs_desc_by_id = dict(zip(ids_ordered, scores, strict=True))
+    if source_has_readme_emb and vecs_ordered:
+        scores = cosine_batch_one_vs_many(source.embedding, vecs_ordered)
+        readme_vs_desc_by_id = dict(zip(ids_ordered, scores, strict=True))
 
     if filter_embedding:
-        candidate_ids = [c.id for c, _ in candidates]
-        if candidate_ids:
-            embeddings = await data.get_embeddings_batch(session, candidate_ids)
-        # Filter out zero/NaN embeddings
-        embeddings = {cid: emb for cid, emb in embeddings.items() if is_real_vector(emb)}
-        if embeddings:
-            ids_ordered = [c.id for c, _ in candidates if c.id in embeddings]
-            vecs_ordered = [embeddings[cid] for cid in ids_ordered]
-            scores = cosine_batch_one_vs_many(filter_embedding, vecs_ordered)
-            for cid, score in zip(ids_ordered, scores, strict=True):
+        # For the tag filter, we need README embeddings (the `embedding` column).
+        # These are also already in the candidate objects.
+        filter_ids = []
+        filter_vecs = []
+        for cand, _ in candidates:
+            if is_real_vector(cand.embedding):
+                filter_ids.append(cand.id)
+                filter_vecs.append(cand.embedding)
+        if filter_vecs:
+            scores = cosine_batch_one_vs_many(filter_embedding, filter_vecs)
+            for cid, score in zip(filter_ids, scores, strict=True):
                 fc_by_id[cid] = max(fc_by_id.get(cid, 0.0), score)
         else:
             logger.info("no candidate embeddings for semantic tag filter — falling back to topic overlap")

@@ -284,12 +284,16 @@ async def recommend(
     session = await data.get_session()
     try:
         # ── Step 1: Load or fetch source repo ────────────────────────────
+        import time as _time
+        _t0 = _time.monotonic()
         source = await data.get_repo(session, full_name)
 
         if source is None:
             # Repo not in DB — fetch EVERYTHING from GitHub in one roundtrip
             logger.info("repo %s not in DB — fetching from GitHub", full_name)
+            _t_gh = _time.monotonic()
             gh = await fetch_all(owner, name)
+            logger.info("fetch_all took %.1fs for %s", _time.monotonic() - _t_gh, full_name)
 
             if gh["error"] and not gh["metadata"]:
                 raise LookupError(f"failed to fetch repo {full_name!r} from GitHub: {gh['error']}")
@@ -360,6 +364,7 @@ async def recommend(
             # Total time: ~2-3s (one Gemini roundtrip) instead of ~5-7s
             # (two sequential calls).
             logger.info("embedding description + README for %s in parallel", full_name)
+            _t_emb = _time.monotonic()
             try:
                 desc_emb, readme_emb = await asyncio.wait_for(
                     asyncio.gather(
@@ -372,6 +377,7 @@ async def recommend(
                 raise EmbedError(f"Gemini embedding timed out for {full_name}") from None
             except Exception as exc:
                 raise EmbedError(f"Gemini embedding failed for {full_name}: {exc}") from exc
+            logger.info("Gemini embed took %.1fs for %s", _time.monotonic() - _t_emb, full_name)
 
             # Validate both vectors
             if not is_real_vector(desc_emb):
@@ -397,17 +403,22 @@ async def recommend(
                         full_name, len(effective_description), len(readme_text[:8000]))
 
         # ── Step 4: Generate candidates (DB only — fast) ─────────────────
+        _t_cand = _time.monotonic()
         candidates = await generate_candidates(session, source, seed=seed, tags=tags)
+        logger.info("generate_candidates took %.1fs (%d candidates) for %s",
+                    _time.monotonic() - _t_cand, len(candidates), full_name)
 
         # ── Step 5: Score + rerank ────────────────────────────────────────
         filter_emb = None
         if tags:
             filter_emb = await embed_text(" ".join(tags))
 
+        _t_score = _time.monotonic()
         scored = await score_many(
             source, candidates, session=session, seed=seed, tags=tags,
             filter_embedding=filter_emb, source_readme_tokens=source_readme_tokens,
         )
+        logger.info("score_many took %.1fs for %s", _time.monotonic() - _t_score, full_name)
         final = rerank(source, scored, limit=limit, seed=seed)
 
         cosine_lookup = _build_cosine_lookup(candidates)
@@ -420,6 +431,8 @@ async def recommend(
         result.from_cache = False
         result.embed_status = embed_status
         _rec_cache_set(cache_key, cache_now, result)
+        logger.info("TOTAL recommend() took %.1fs for %s (%d results)",
+                    _time.monotonic() - _t0, full_name, len(scored_repos))
         return result
     finally:
         await session.close()

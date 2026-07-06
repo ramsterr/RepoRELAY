@@ -81,8 +81,8 @@ def _make_candidate_repo(
         topics=topics or ["python", "library"],
         stars=stars,
         dependencies=["numpy"],
-        embedding=embedding or [0.1 * (i % 10 + 1) for i in range(512)],
-        description_embedding=description_embedding or [0.05 * (i % 10 + 1) for i in range(512)],
+        embedding=embedding if embedding is not None else [0.1 * (i % 10 + 1) for i in range(512)],
+        description_embedding=description_embedding if description_embedding is not None else [0.05 * (i % 10 + 1) for i in range(512)],
     )
 
 
@@ -1091,43 +1091,29 @@ class TestEmbeddingValidation:
 
     @pytest.mark.asyncio
     async def test_score_many_zero_candidate_gets_zero_cosine(self):
-        """When a candidate has a zero embedding, its cosine_sim feature
-        must be 0.0, not some inflated number from the NEUTRAL_SIM default."""
+        """When a candidate has no embeddings, its description_cosine_sim
+        must be 0.0 (not some inflated number)."""
         source = _make_source_repo(
             description="A widget library",
             embedding=[0.1 * (i % 10 + 1) for i in range(512)],
             description_embedding=[0.05 * (i % 10 + 1) for i in range(512)],
         )
-        # This candidate has NEUTRAL_SIM = 0.5 from the SQL pool
-        # (no vector-based similarity). The score_many should use 0.5
-        # as the cosine_sim feature value — that's the SQL-only default.
-        sql_only_cand = _make_candidate_repo(
-            3001, "sql-only", "repo",
-            embedding=None,  # no embedding in DB
-            description_embedding=None,
+        # This candidate has no embeddings — description_cosine_sim should be 0
+        sql_only_cand = Repo(
+            id=3001, owner="sql-only", name="repo", full_name="sql-only/repo",
+            description="A useful library", language="Python",
+            topics=["python", "library"], stars=500, dependencies=["numpy"],
+            embedding=None, description_embedding=None,
         )
 
-        fake_session = MagicMock()
-
-        async def fake_get_desc_batch(session, ids):
-            return {}  # no description embeddings available
-
-        with patch.object(data, "get_description_embeddings_batch", fake_get_desc_batch):
-            scored = await score_many(
-                source, [(sql_only_cand, 0.5)],
-                session=fake_session,
-                source_readme_tokens={"widget", "python"},
-            )
+        scored = await score_many(
+            source, [(sql_only_cand, 0.5)],
+            source_readme_tokens={"widget", "python"},
+        )
 
         assert len(scored) == 1
         _, score, features = scored[0]
-        # The SQL-only candidate should NOT get a high cosine_sim
-        # (it has no embedding to compare against)
-        assert features.cosine_sim == 0.5, (
-            f"SQL-only candidate got cosine_sim={features.cosine_sim}, "
-            "expected NEUTRAL_SIM=0.5"
-        )
-        # Its description_cosine_sim should be 0.0 (no description embedding)
+        assert features.cosine_sim == 0.5
         assert features.description_cosine_sim == 0.0
 
     @pytest.mark.asyncio

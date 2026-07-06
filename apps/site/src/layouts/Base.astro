@@ -119,29 +119,6 @@ import "../styles/global.css";
         }
 
         var THEMES = [
-          {
-            name: "aurora",
-            icon: "✦",
-            cellSize: 16,
-            dark: ["#0b1026", "#142850", "#1f5f6b", "#2ecc71", "#a3ffce"],
-            light: ["#e8f4f8", "#9bd3e6", "#4db6ac", "#2e8b7b", "#0d5c4d"],
-            accent: "#2ecc71",
-            animation: {
-              css: "@keyframes rr-shimmer{0%,100%{opacity:0.6}50%{opacity:1}}.rr-shimmer{animation:rr-shimmer 4s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
-              cellClass: function(v,x,y,cols,rows){return v>0.78?{"class":"rr-shimmer",style:"animation-delay:"+((x*0.12+y*0.08)%4)+"s"}:null;}
-            },
-            fn: function (c, rand, cols, rows) {
-              var noise = makeNoise(rand);
-              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var ny = y / rows;
-                var wave = sin(x * 0.025 + noise(x * 0.03, y * 0.06) * 5) * 0.5 + 0.5;
-                var fade = 1 - ny * 0.85;
-                var shimmer = 0.65 + 0.35 * noise(x * 0.08 + 50, y * 0.04 + 30);
-                this.push(clamp(wave * fade * shimmer, 0, 1));
-              }
-            }
-          },
-          {
             name: "ocean",
             icon: "≈",
             cellSize: 12,
@@ -492,31 +469,6 @@ import "../styles/global.css";
               }
             }
           },
-          {
-            name: "nebula",
-            icon: "🌌",
-            cellSize: 14,
-            dark: ["#0f0518", "#2d1b4e", "#7c3aed", "#c084fc", "#fae8ff"],
-            light: ["#faf5ff", "#e9d5ff", "#c084fc", "#9333ea", "#581c87"],
-            accent: "#c084fc",
-            fn: function (c, rand, cols, rows) {
-              var noise = makeNoise(rand);
-              var clouds = makeSeeds(rand, cols, rows, 8);
-              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var n = noise(x * 0.05, y * 0.05);
-                var v = n * 0.35;
-                for (var i = 0; i < clouds.length; i++) {
-                  var cloud = clouds[i];
-                  var d2 = (x - cloud.x) * (x - cloud.x) + (y - cloud.y) * (y - cloud.y);
-                  var r = 5 + (i % 4) * 2;
-                  if (d2 < r * r) v = max(v, 0.45 + (1 - d2 / (r * r)) * 0.45);
-                }
-                if (rand() > 0.985) v = 0.95;
-                this.push(clamp(v, 0, 1));
-              }
-            }
-          },
-                    {
             name: "sakura",
             icon: "🌸",
             cellSize: 18,
@@ -611,33 +563,6 @@ import "../styles/global.css";
               }
             }
           },
-          {
-            name: "arctic",
-            icon: "❄️",
-            cellSize: 16,
-            dark: ["#081016", "#0e7490", "#22d3ee", "#a5f3fc", "#ecfeff"],
-            light: ["#ecfeff", "#a5f3fc", "#22d3ee", "#0891b2", "#164e63"],
-            accent: "#22d3ee",
-            fn: function (c, rand, cols, rows) {
-              var flakes = makeSeeds(rand, cols, rows, 22);
-              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var nx = x / cols, ny = y / rows;
-                var v = 0.05 + ny * 0.15 + sin(nx * 3 + ny * 2) * 0.04;
-                for (var i = 0; i < flakes.length; i++) {
-                  var f = flakes[i];
-                  var dx = abs(x - f.x), dy = abs(y - f.y);
-                  var size = 1.5 + (i % 3);
-                  var onArm = (dx < 0.8 || dy < 0.8 || abs(dx - dy) < 0.8);
-                  var dist = max(dx, dy);
-                  if (onArm && dist <= size) {
-                    v = 0.94 - dist * 0.14;
-                  }
-                }
-                this.push(clamp(v, 0, 1));
-              }
-            }
-          },
-          {
             name: "candy",
             icon: "🍬",
             cellSize: 22,
@@ -665,40 +590,6 @@ fn: function (c, rand, cols, rows) {
               }
             }
           },
-          {
-            name: "cyber",
-            icon: "⚡",
-            cellSize: 14,
-            dark: ["#050510", "#1e1b4b", "#06b6d4", "#22d3ee", "#e0f2fe"],
-            light: ["#ecfeff", "#a5f3fc", "#06b6d4", "#0891b2", "#164e63"],
-            accent: "#06b6d4",
-            animation: {
-              css: "@keyframes rr-gridpulse{0%,100%{opacity:0.4}50%{opacity:1}}.rr-grid{animation:rr-gridpulse 1.8s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
-              cellClass: function(v,x,y,cols,rows){return v>0.75?{"class":"rr-grid",style:"animation-delay:"+(((x+y)%6)*0.3)+"s"}:null;}
-            },
-            fn: function (c, rand, cols, rows) {
-              var horizon = floor(rows * 0.5);
-              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var v = 0.03;
-                if (y > horizon) {
-                  var rowUnit = (y - horizon) / (rows - horizon);
-                  var perspective = rowUnit * rowUnit;
-                  var centerX = cols / 2;
-                  var angle = atan2(y - horizon, x - centerX);
-                  var line = abs(sin(angle * 12)) < 0.08 + perspective * 0.1 ? 0.75 : 0;
-                  var scan = (y % max(2, floor(4 * (1 - perspective)))) === 0 ? 0.6 : 0;
-                  var glow = (y - horizon < 3) ? 0.5 : 0;
-                  v = max(line, scan, glow, 0.1 + perspective * 0.25);
-                } else {
-                  var b = floor((x * 7 + y * 13) % 17);
-                  if (y > horizon - b && rand() > 0.3) v = 0.35;
-                  if (rand() > 0.992) v = 0.9;
-                }
-                this.push(clamp(v, 0, 1));
-              }
-            }
-          },
-          {
             name: "meadow",
             icon: "🌼",
             cellSize: 16,
@@ -848,36 +739,6 @@ fn: function (c, rand, cols, rows) {
               }
             }
           },
-          {
-            name: "space",
-            icon: "🪐",
-            cellSize: 18,
-            dark: ["#020617", "#0f172a", "#4f46e5", "#a5b4fc", "#e0e7ff"],
-            light: ["#eef2ff", "#c7d2fe", "#818cf8", "#4f46e5", "#312e81"],
-            accent: "#818cf8",
-            animation: {
-              css: "@keyframes rr-twinkle{0%,100%{opacity:0.25}50%{opacity:1}}.rr-star{animation:rr-twinkle 3s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
-              cellClass: function(v,x,y,cols,rows){return v>0.85?{"class":"rr-star",style:"animation-delay:"+(((x*4+y*7)%30)*0.1)+"s"}:null;}
-            },
-            fn: function (c, rand, cols, rows) {
-              var planets = [];
-              for (var i = 0; i < 4; i++) planets.push({ x: rand() * cols, y: rand() * rows, r: 3 + rand() * 5 });
-              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var v = 0.05;
-                for (var i = 0; i < planets.length; i++) {
-                  var p = planets[i];
-                  var dx = x - p.x, dy = y - p.y;
-                  var d = sqrt(dx * dx + dy * dy);
-                  if (d < p.r) v = 0.4 + (1 - d / p.r) * 0.45;
-                  // ring
-                  if (i === 0 && abs(d - p.r - 1.5) < 0.8 && abs(dx) > p.r * 0.3) v = 0.75;
-                }
-                if (rand() > 0.992) v = 0.95;
-                this.push(clamp(v, 0, 1));
-              }
-            }
-          },
-          {
             name: "coral",
             icon: "🪸",
             cellSize: 14,
@@ -911,55 +772,6 @@ fn: function (c, rand, cols, rows) {
               }
             }
           },
-          {
-            name: "cabin",
-            icon: "🏕",
-            cellSize: 18,
-            dark: ["#0f172a", "#1e3a5f", "#78350f", "#b45309", "#fde68a"],
-            light: ["#f8fafc", "#bfdbfe", "#d97706", "#92400e", "#451a03"],
-            accent: "#d97706",
-            fn: function (c, rand, cols, rows) {
-              var cabinX = floor(cols * 0.4);
-              var groundY = floor(rows * 0.72);
-              var moonX = floor(cols * 0.82), moonY = floor(rows * 0.18), moonR = 3;
-              var trees = [];
-              for (var i = 0; i < 5; i++) trees.push({ x: rand() * cols, h: 8 + rand() * 10 });
-              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-                var ny = y / rows;
-                var v = 0.05 + ny * 0.12;
-                var dx = x - moonX, dy = y - moonY;
-                if (dx * dx + dy * dy < moonR * moonR) v = 0.9;
-                if (rand() > 0.99) v = 0.7;
-                if (y >= groundY) {
-                  v = 0.35 + ((y - groundY) / (rows - groundY)) * 0.25;
-                  for (var i = 0; i < trees.length; i++) {
-                    var t = trees[i];
-                    var tx = floor(t.x);
-                    var th = t.h;
-                    var ty = groundY;
-                    if (x >= tx - 1 && x <= tx + 1 && y > ty - th * 0.2 && y <= ty) v = 0.2;
-                    for (var lyr = 0; lyr < 3; lyr++) {
-                      var lyTop = ty - th * (0.2 + lyr * 0.25);
-                      var lyBot = ty - th * (lyr * 0.25);
-                      var lw = 4 - lyr;
-                      if (y >= lyTop && y <= lyBot && abs(x - tx) <= lw * (1 - (y - lyTop) / (lyBot - lyTop))) v = 0.15;
-                    }
-                  }
-                  var cw = 9, ch = 6;
-                  if (x >= cabinX && x < cabinX + cw && y >= groundY - ch && y < groundY) v = 0.32;
-                  if (y >= groundY - ch - 3 && y < groundY - ch) {
-                    var roofW = (cw / 2) + (groundY - ch - y);
-                    if (abs(x - (cabinX + cw / 2)) < roofW) v = 0.22;
-                  }
-                  if (x >= cabinX + 2 && x <= cabinX + 5 && y >= groundY - ch + 2 && y <= groundY - 1) v = 0.92;
-                  if (x >= cabinX + cw - 3 && x <= cabinX + cw - 1 && y >= groundY - ch + 1 && y < groundY) v = 0.25;
-                  if (x >= cabinX + 2 && x <= cabinX + 4 && y >= groundY - ch - 6 && y < groundY - ch - 3 && (x + y) % 3 === 0) v = 0.45;
-                }
-                this.push(clamp(v, 0, 1));
-              }
-            }
-          },
-                    {
             name: "disco",
             icon: "🪩",
             cellSize: 16,

@@ -414,13 +414,41 @@ async def recommend(
                 else:
                     keywords = []
 
-                if keywords:
-                    # Build query: "data science education curriculum"
-                    query_text = " ".join(keywords[:20])
-                    logger.info("  keyword query for %s: %s", full_name, query_text[:120])
+                # Build search query from THREE sources (priority order):
+                #   1. Description (most purpose-dense — one sentence)
+                #   2. Repo name tokens (differentiator: "data-science" vs "computer-science")
+                #   3. Top distinctive keywords (from keyword extraction)
+                # This prevents two repos from the same org (ossu/data-science
+                # and ossu/computer-science) from producing identical search vectors.
+                query_parts: list[str] = []
 
-                    # 2. Embed the keywords as a single query vector
-                    # One Gemini call instead of two — fast!
+                # Priority 1: Description (most purpose-dense text)
+                if desc_text and desc_text.strip():
+                    query_parts.append(desc_text.strip())
+
+                # Priority 2: Repo name tokens (the differentiating signal)
+                name_tokens = full_name.lower().replace("/", " ").replace("-", " ").replace("_", " ").replace(".", " ").split()
+                # Filter out generic name tokens
+                generic_names = {"ossu", "awesome", "list", "collection", "repo", "course", "courses", "curriculum", "guide", "project", "tool", "library", "framework", "app", "api", "data", "code", "src", "main", "test", "docs", "master", "main", "dev", "prod", "v1", "v2"}
+                name_tokens = [t for t in name_tokens if t not in generic_names and len(t) > 1]
+                if name_tokens:
+                    query_parts.append(" ".join(name_tokens))
+
+                # Priority 3: Top distinctive keywords
+                if keywords:
+                    # Filter generic education keywords that appear in many repos
+                    filtered_kw = [kw for kw in keywords
+                                  if kw.lower() not in {"self-taught", "self-taught education", "free self-taught",
+                                                        "path", "education", "learning", "course", "courses",
+                                                        "curriculum", "tutorial", "guide", "introduction",
+                                                        "getting started", "best practices", "awesome list"}]
+                    query_parts.append(" ".join(filtered_kw[:15]))
+
+                query_text = " ".join(query_parts)
+                if query_text:
+                    logger.info("  search query for %s: %s", full_name, query_text[:150])
+
+                    # 2. Embed the query as a single vector — one Gemini call
                     query_emb = await embed_text(query_text)
                     if is_real_vector(query_emb):
                         source = source.model_copy(update={

@@ -835,7 +835,9 @@ async def set_keywords(
     keywords: list[str],
 ) -> None:
     """Store extracted keywords and update the search_vector."""
-    search_text = " ".join(keywords)
+    # Limit keywords to prevent tsvector from timing out on Neon
+    keywords = keywords[:30]
+    search_text = " ".join(keywords)[:500]
     await session.execute(
         text(
             """

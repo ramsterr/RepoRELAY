@@ -128,19 +128,17 @@ class TestFullWorkflow:
         1. fetch_all fetches ALL GitHub data in ONE roundtrip
         2. upsert to DB
         3. embed description + README in parallel via asyncio.gather
-        4. generate_candidates builds a pool using the in-memory embedding
-        5. score_many scores each candidate against the source
-        6. rerank applies diversity rules
-        7. Only then do we return results.
+        4. generate_candidates builds a pool
+        5. score_many scores each candidate
+        6. categorize_results splits into groups
+        7. Only then do we return categorized results.
         """
-        source = _make_source_repo(description="A fast widget library")
         candidates = [
             _make_candidate_repo(2001, "other", "lib-a"),
             _make_candidate_repo(2002, "another", "lib-b"),
             _make_candidate_repo(2003, "third", "lib-c", language="Rust"),
         ]
 
-        # Track call order
         call_order: list[str] = []
 
         async def mock_fetch_all(owner, name):
@@ -167,15 +165,7 @@ class TestFullWorkflow:
             )) for i, (c, _) in enumerate(cands)]
 
         mock_session = FakeSession()
-
-        # Source after upsert (no embeddings yet)
         source_no_emb = _make_source_repo(description="A fast widget library")
-        # Source after embedding (both vectors populated)
-        source_with_emb = _make_source_repo(
-            description="A fast widget library",
-            embedding=[0.1 * (i % 10 + 1) for i in range(512)],
-            description_embedding=[0.1 * (i % 10 + 1) for i in range(512)],
-        )
 
         with (
             patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
@@ -187,27 +177,15 @@ class TestFullWorkflow:
             patch.object(recommend_module, "embed_text", side_effect=mock_embed_text),
             patch.object(recommend_module, "generate_candidates", AsyncMock(return_value=[(c, 0.5) for c in candidates])),
             patch.object(recommend_module, "score_many", side_effect=mock_score_many),
-            patch.object(recommend_module, "rerank") as mock_rerank,
         ):
-            mock_rerank.return_value = [
-                (candidates[0], 0.8, Features(
-                    language_match=1.0, topic_overlap=0.5, cosine_sim=0.7,
-                    description_sim=0.3, description_cosine_sim=0.6,
-                    readme_topic_sim=0.4, dep_overlap=0.2, popularity_sim=0.5,
-                    trending_boost=0.0, quality_signal=0.5, language_diversity=0.0,
-                )),
-            ]
             result = await recommend("acme/widget", limit=1)
 
-        # Verify the pipeline ran in the correct order
-        assert "fetch_all" in call_order, "fetch_all was not called"
-        assert "embed_text" in call_order, "embed_text was not called"
-        assert "score_many" in call_order, "score_many was not called"
-
-        # Verify the result is complete
+        assert "fetch_all" in call_order
+        assert "embed_text" in call_order
+        assert "score_many" in call_order
         assert result.source_repo == "acme/widget"
-        assert len(result.repos) == 1
-        assert result.repos[0].full_name == "other/lib-a"
+        assert len(result.groups) > 0
+        assert len(result.flat_repos) == 3
         assert result.embed_status["desc_emb"] == "ok"
         assert result.embed_status["readme_emb"] == "ok"
 
@@ -387,8 +365,8 @@ class TestCandidateGeneration:
 
     @pytest.mark.asyncio
     async def test_vector_pool_uses_in_memory_embedding(self):
-        """generate_candidates must pass the in-memory source.embedding
-        to fetch_vector_neighbors, not rely on a DB cross-join."""
+        """generate_candidates must pass the in-memory source embeddings
+        to fetch_desc_vector_neighbors — both README and description."""
         source_emb = [0.15 * (i % 10 + 1) for i in range(512)]
         source = _make_source_repo(
             description="A widget library",
@@ -397,15 +375,15 @@ class TestCandidateGeneration:
         )
 
         with patch.object(data, "fetch_filtered_pool", AsyncMock(return_value=[])):
-            with patch.object(data, "fetch_vector_neighbors", AsyncMock(return_value={})) as fvn:
+            with patch.object(data, "fetch_desc_vector_neighbors", AsyncMock(return_value={})) as fvn:
                 with patch.object(data, "get_embedding", AsyncMock(return_value=None)):
                     await generate_candidates(FakeSession(), source, pool_size=10, vector_k=10)
 
-        fvn.assert_awaited_once()
-        passed_emb = fvn.await_args.kwargs["source_embedding"]
-        assert passed_emb == source_emb, (
-            "fetch_vector_neighbors must receive the in-memory source.embedding, "
-            "not re-read from DB"
+        # Called twice: once for README vs desc, once for desc vs desc
+        assert fvn.await_count >= 1
+        all_embs = [kwargs["source_embedding"] for call in fvn.await_args_list for _, kwargs in [call]]
+        assert source_emb in all_embs, (
+            "fetch_desc_vector_neighbors must receive the in-memory source embeddings"
         )
 
     @pytest.mark.asyncio
@@ -419,7 +397,7 @@ class TestCandidateGeneration:
         )
 
         with patch.object(data, "fetch_filtered_pool", AsyncMock(return_value=[])):
-            with patch.object(data, "fetch_vector_neighbors", AsyncMock()) as fvn:
+            with patch.object(data, "fetch_desc_vector_neighbors", AsyncMock()) as fvn:
                 with patch.object(data, "get_embedding", AsyncMock(return_value=None)):
                     await generate_candidates(FakeSession(), source, pool_size=10, vector_k=10)
 
@@ -440,7 +418,7 @@ class TestCandidateGeneration:
         )
 
         with patch.object(data, "fetch_filtered_pool", AsyncMock(return_value=[repo_a, repo_b])):
-            with patch.object(data, "fetch_vector_neighbors", AsyncMock(
+            with patch.object(data, "fetch_desc_vector_neighbors", AsyncMock(
                 return_value={repo_a.id: (repo_a, 0.8), repo_c.id: (repo_c, 0.6)}
             )):
                 result = await generate_candidates(FakeSession(), source, pool_size=10, vector_k=10)
@@ -513,7 +491,7 @@ class TestScoring:
         with patch.object(data, "get_description_embeddings_batch", fake_get_desc_batch):
             scored = await score_many(
                 source, [(cand, 0.75)],
-                session=fake_session, seed=None,
+                seed=None,
                 source_readme_tokens={"widget", "python", "data"},
             )
 
@@ -529,7 +507,7 @@ class TestScoring:
     @pytest.mark.asyncio
     async def test_score_many_weights_reflect_real_embeddings(self):
         """When the source has real embeddings, the scoring weights must
-        include all semantic signals — not redistribute them away."""
+        include all description-based signals."""
         from reporelay_mvp.score import _get_weights
 
         weights = _get_weights(
@@ -540,15 +518,11 @@ class TestScoring:
             has_topics=True,
         )
 
-        assert "cosine_sim" in weights, "cosine_sim weight missing when readme embedding exists"
-        assert "description_cosine_sim" in weights, "description_cosine_sim weight missing when desc embedding exists"
+        assert "description_cosine_sim" in weights, "description_cosine_sim weight missing"
         assert "readme_vs_desc_cosine_sim" in weights, "readme_vs_desc_cosine_sim weight missing"
-        assert weights["cosine_sim"] > 0.0
         assert weights["description_cosine_sim"] > 0.0
         assert weights["readme_vs_desc_cosine_sim"] > 0.0
-        # All three embedding-based signals should be significant
-        assert weights["cosine_sim"] >= 0.10, "cosine_sim should be ≥0.10"
-        assert weights["readme_vs_desc_cosine_sim"] >= 0.10, "readme_vs_desc_cosine_sim should be ≥0.10"
+        assert weights["readme_vs_desc_cosine_sim"] >= 0.25, "readme_vs_desc_cosine_sim should be dominant (>=0.25)"
 
 
 # ── 5. FAILURE HANDLING ─────────────────────────────────────────────
@@ -915,7 +889,6 @@ class TestSourceComparedAgainstDBCorpus:
             scored = await score_many(
                 source,
                 [(similar_cand, 0.85), (different_cand, 0.15)],
-                session=fake_session,
                 source_readme_tokens={"widget", "python", "data"},
             )
 
@@ -1155,7 +1128,6 @@ class TestEmbeddingValidation:
             scored = await score_many(
                 source,
                 [(similar, 0.9), (different, 0.1)],
-                session=fake_session,
                 source_readme_tokens={"python", "ml", "library", "data"},
             )
 

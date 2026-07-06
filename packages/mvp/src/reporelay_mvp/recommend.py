@@ -40,7 +40,14 @@ from reporelay_mvp.github import (
     fetch_readme,
     search_repositories,
 )
-from reporelay_mvp.models import Features, Repo, ScoredRecommendation, ScoredRepo
+from reporelay_mvp.models import (
+    CategorizedRecommendation,
+    Features,
+    RecommendationGroup,
+    Repo,
+    ScoredRecommendation,
+    ScoredRepo,
+)
 from reporelay_mvp.rerank import rerank
 from reporelay_mvp.score import score_many
 from reporelay_mvp.settings import get_mvp_settings
@@ -277,9 +284,8 @@ async def recommend(
     cached = _rec_cache_get(cache_key, cache_now)
     if cached is not None:
         logger.info("rec cache hit for %s", cache_key)
-        return ScoredRecommendation(
-            source_repo=cached.source_repo, repos=cached.repos, from_cache=True,
-        )
+        cached.from_cache = True
+        return cached
 
     session = await data.get_session()
     try:
@@ -289,14 +295,13 @@ async def recommend(
         source = await data.get_repo(session, full_name)
 
         if source is None:
-            # Repo not in DB — fetch EVERYTHING from GitHub in one roundtrip
             logger.info("repo %s not in DB — fetching from GitHub", full_name)
             _t_gh = _time.monotonic()
             gh = await fetch_all(owner, name)
             logger.info("fetch_all took %.1fs for %s", _time.monotonic() - _t_gh, full_name)
 
             if gh["error"] and not gh["metadata"]:
-                raise LookupError(f"failed to fetch repo {full_name!r} from GitHub: {gh['error']}")
+                raise LookupError(f"failed to fetch repo {full_name!r}: {gh['error']}")
 
             metadata = gh["metadata"]
             repo_id = int(metadata.get("id", 0))
@@ -313,13 +318,11 @@ async def recommend(
                 dependencies=deps,
             )
             await session.commit()
-
-            # Re-read from DB to get the full Repo model
             source = await data.get_repo(session, full_name)
             if source is None:
                 raise LookupError(f"failed to persist repo {full_name!r}")
 
-        # ── Step 2: Check if we need to embed ────────────────────────────
+        # ── Step 2: Embed if needed ──────────────────────────────────────
         from reporelay_mvp.data import is_real_vector
 
         source_has_desc_emb = is_real_vector(source.description_embedding)
@@ -331,25 +334,19 @@ async def recommend(
             "readme_emb": "cached" if source_has_readme_emb else "missing",
         }
         source_readme_tokens: set[str] | None = None
-        readme_text: str = ""
 
         if source_needs_embed:
-            # Fetch README if we don't have it yet (repo was already in DB
-            # but never had its README fetched)
-            if not readme_text:
-                gh = await fetch_all(owner, name)
-                readme_text = gh["readme"]
+            gh = await fetch_all(owner, name)
+            readme_text = gh.get("readme", "")
 
             if not readme_text or not readme_text.strip():
-                raise EmbedError(f"repo {owner}/{name} has no README — cannot embed")
+                raise EmbedError(f"repo {full_name} has no README — cannot embed")
 
-            # Build effective description
             from reporelay_mvp.purpose import get_effective_description
             effective_description = get_effective_description(source.description, readme_text)
             if not effective_description:
                 effective_description = readme_text.strip()[:200].replace("\n", " ")
 
-            # Update description if it changed
             if effective_description != (source.description or ""):
                 await data.upsert_repo(
                     session, repo_id=source.id, owner=owner, name=name,
@@ -359,10 +356,6 @@ async def recommend(
                 )
                 source = source.model_copy(update={"description": effective_description})
 
-            # ── Step 3: Embed description AND README in parallel ──────────
-            # Both texts go to Gemini at the same time via asyncio.gather.
-            # Total time: ~2-3s (one Gemini roundtrip) instead of ~5-7s
-            # (two sequential calls).
             logger.info("embedding description + README for %s in parallel", full_name)
             _t_emb = _time.monotonic()
             try:
@@ -379,13 +372,11 @@ async def recommend(
                 raise EmbedError(f"Gemini embedding failed for {full_name}: {exc}") from exc
             logger.info("Gemini embed took %.1fs for %s", _time.monotonic() - _t_emb, full_name)
 
-            # Validate both vectors
             if not is_real_vector(desc_emb):
                 raise EmbedError(f"description embedding is zero/NaN for {full_name}")
             if not is_real_vector(readme_emb):
                 raise EmbedError(f"README embedding is zero/NaN for {full_name}")
 
-            # Persist both to DB in one shot
             await data.set_description_embedding(session, repo_id=source.id, description_embedding=desc_emb)
             await data.set_embedding(session, repo_id=source.id, embedding=readme_emb)
             source = source.model_copy(update={
@@ -393,7 +384,6 @@ async def recommend(
                 "embedding": readme_emb,
             })
 
-            # Extract README tokens for readme_topic_sim feature
             from reporelay_mvp.features import _tokenize_readme
             source_readme_tokens = _tokenize_readme(source.full_name, readme_text)
 
@@ -402,40 +392,154 @@ async def recommend(
             logger.info("embedding complete for %s (desc=%d, readme=%d chars)",
                         full_name, len(effective_description), len(readme_text[:8000]))
 
-        # ── Step 4: Generate candidates (DB only — fast) ─────────────────
+        # ── Step 3: Generate candidates ──────────────────────────────────
         _t_cand = _time.monotonic()
         candidates = await generate_candidates(session, source, seed=seed, tags=tags)
         logger.info("generate_candidates took %.1fs (%d candidates) for %s",
                     _time.monotonic() - _t_cand, len(candidates), full_name)
 
-        # ── Step 5: Score + rerank ────────────────────────────────────────
+        # ── Step 4: Score ────────────────────────────────────────────────
         filter_emb = None
         if tags:
             filter_emb = await embed_text(" ".join(tags))
 
         _t_score = _time.monotonic()
         scored = await score_many(
-            source, candidates, session=session, seed=seed, tags=tags,
+            source, candidates, seed=seed, tags=tags,
             filter_embedding=filter_emb, source_readme_tokens=source_readme_tokens,
         )
         logger.info("score_many took %.1fs for %s", _time.monotonic() - _t_score, full_name)
-        final = rerank(source, scored, limit=limit, seed=seed)
 
-        cosine_lookup = _build_cosine_lookup(candidates)
-        scored_repos: list[ScoredRepo] = []
-        for repo, sc, features in final:
-            cs = cosine_lookup.get(repo.id, 0.0)
-            scored_repos.append(_build_scored_repo(source, repo, sc, cs, features=features))
-
-        result = ScoredRecommendation(source_repo=full_name, repos=scored_repos)
-        result.from_cache = False
+        # ── Step 5: Categorize and return ────────────────────────────────
+        result = categorize_results(source, scored, limit, seed)
         result.embed_status = embed_status
+        result.from_cache = False
         _rec_cache_set(cache_key, cache_now, result)
-        logger.info("TOTAL recommend() took %.1fs for %s (%d results)",
-                    _time.monotonic() - _t0, full_name, len(scored_repos))
+        logger.info("TOTAL recommend() took %.1fs for %s (%d groups, %d repos)",
+                    _time.monotonic() - _t0, full_name,
+                    len(result.groups), len(result.flat_repos))
         return result
     finally:
         await session.close()
+
+
+def categorize_results(
+    source: Repo,
+    scored: list[tuple[Repo, float, Features]],
+    limit: int,
+    seed: int | None,
+) -> CategorizedRecommendation:
+    """Split scored candidates into labeled groups by primary signal."""
+    source_lang = source.language.lower() if source.language else None
+    source_owner = source.owner.lower()
+
+    # Filter out source repo and same-owner repos
+    filtered = [
+        (repo, sc, feats) for repo, sc, feats in scored
+        if repo.id != source.id
+        and repo.owner.lower() != source_owner
+    ]
+    filtered.sort(key=lambda x: x[1], reverse=True)
+
+    # Deduplicate by owner
+    seen_owners: set[str] = set()
+    deduped: list[tuple[Repo, float, Features]] = []
+    for repo, sc, feats in filtered:
+        owner = repo.owner.lower()
+        if owner in seen_owners:
+            continue
+        seen_owners.add(owner)
+        deduped.append((repo, sc, feats))
+
+    used_ids: set[int] = set()
+    groups: list[RecommendationGroup] = []
+
+    # Group 1: Semantic Matches — highest readme_vs_desc_cosine_sim
+    semantic = sorted(deduped, key=lambda x: x[2].readme_vs_desc_cosine_sim, reverse=True)
+    semantic = [r for r in semantic if r[2].readme_vs_desc_cosine_sim > 0.3]
+    if semantic:
+        g = _make_group(semantic, "Semantic Matches",
+                       "readme-description embedding similarity", used_ids, 6)
+        if g:
+            groups.append(g)
+
+    # Group 2: Language-Based — same language
+    if source_lang:
+        lang = [r for r in deduped if r[2].language_match >= 1.0]
+        g = _make_group(lang, f"Language-Based ({source.language})",
+                       "same primary language", used_ids, 4)
+        if g:
+            groups.append(g)
+
+    # Group 3: Topic-Aligned — high topic overlap
+    topic = [r for r in deduped if r[2].topic_overlap > 0.2]
+    g = _make_group(topic, "Topic-Aligned", "shared topic overlap",
+                   used_ids, 4)
+    if g:
+        groups.append(g)
+
+    # Group 4: Cross-Discovery — different language, still related
+    if source_lang:
+        cross = [r for r in deduped
+                 if r[0].language and r[0].language.lower() != source_lang
+                 and (r[2].topic_overlap > 0.1 or r[2].readme_vs_desc_cosine_sim > 0.2)]
+        g = _make_group(cross, "Cross-Discovery",
+                       "different language, related topic", used_ids, 4)
+        if g:
+            groups.append(g)
+
+    # Group 5: Scale-Matched — similar popularity tier
+    scale = sorted(deduped, key=lambda x: x[2].star_ratio, reverse=True)
+    g = _make_group(scale, "Scale-Matched", "similar popularity tier",
+                   used_ids, 4)
+    if g:
+        groups.append(g)
+
+    # Fallback: remaining scored repos
+    remaining = [r for r in deduped if r[0].id not in used_ids]
+    if remaining:
+        g = _make_group(remaining, "More Recommendations", "scored match",
+                       used_ids, min(8, len(remaining)))
+        if g:
+            groups.append(g)
+
+    all_repos: list[ScoredRepo] = []
+    for g in groups:
+        all_repos.extend(g.repos)
+
+    return CategorizedRecommendation(
+        source_repo=source.full_name,
+        flat_repos=all_repos,
+        groups=groups,
+    )
+
+
+def _make_group(
+    candidates: list[tuple[Repo, float, Features]],
+    label: str,
+    signal: str,
+    used_ids: set[int],
+    max_repos: int,
+) -> RecommendationGroup | None:
+    repos = []
+    for repo, sc, feats in candidates:
+        if repo.id in used_ids:
+            continue
+        if len(repos) >= max_repos:
+            break
+        used_ids.add(repo.id)
+        repos.append(ScoredRepo(
+            id=repo.id, owner=repo.owner, name=repo.name,
+            full_name=repo.full_name, description=repo.description,
+            language=repo.language, topics=repo.topics, stars=repo.stars,
+            dependencies=repo.dependencies, score=sc,
+            features=feats.as_dict(),
+            shared_topics=[],
+            shared_language=feats.language_match >= 1.0,
+        ))
+    if not repos:
+        return None
+    return RecommendationGroup(label=label, signal=signal, repos=repos)
 
 
 async def _embed_description_fast(

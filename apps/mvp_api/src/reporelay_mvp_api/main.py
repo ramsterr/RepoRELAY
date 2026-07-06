@@ -82,9 +82,16 @@ class ScoredRepoOut(BaseModel):
     shared_language: bool = False
 
 
+class GroupOut(BaseModel):
+    label: str
+    signal: str
+    repos: list[ScoredRepoOut]
+
+
 class RecommendResponse(BaseModel):
     source_repo: str
-    repos: list[ScoredRepoOut]
+    repos: list[ScoredRepoOut] = Field(default_factory=list)
+    groups: list[GroupOut] = Field(default_factory=list)
     from_cache: bool = False
     embed_status: dict[str, str] = Field(
         default_factory=dict,
@@ -472,9 +479,34 @@ async def recommend(
 
     return RecommendResponse(
         source_repo=rec.source_repo,
-        repos=[ScoredRepoOut(**{k: v for k, v in r.model_dump().items() if k != "dependencies"}) for r in rec.repos],
+        repos=_build_repo_out_list(rec.flat_repos),
+        groups=_build_group_out_list(rec.groups),
+        from_cache=rec.from_cache,
         embed_status=getattr(rec, "embed_status", {}),
     )
+
+
+def _build_repo_out(repo) -> ScoredRepoOut:
+    return ScoredRepoOut(
+        id=repo.id, full_name=repo.full_name, description=repo.description,
+        language=repo.language, topics=repo.topics, stars=repo.stars,
+        score=repo.score, features=repo.features,
+        shared_topics=repo.shared_topics, shared_language=repo.shared_language,
+    )
+
+
+def _build_repo_out_list(repos: list) -> list[ScoredRepoOut]:
+    return [_build_repo_out(r) for r in repos]
+
+
+def _build_group_out_list(groups: list) -> list[GroupOut]:
+    return [
+        GroupOut(
+            label=g.label, signal=g.signal,
+            repos=[_build_repo_out(r) for r in g.repos],
+        )
+        for g in groups
+    ]
 
 
 @app.get("/explore", response_model=RecommendResponse)
@@ -492,6 +524,7 @@ async def explore(
 
     return RecommendResponse(
         source_repo=rec.source_repo,
-        repos=[ScoredRepoOut(**{k: v for k, v in r.model_dump().items() if k != "dependencies"}) for r in rec.repos],
+        repos=_build_repo_out_list(rec.flat_repos),
+        groups=_build_group_out_list(rec.groups),
         embed_status=getattr(rec, "embed_status", {}),
     )

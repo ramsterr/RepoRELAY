@@ -139,7 +139,7 @@ async def test_generate_candidates_uses_in_memory_embedding():
     fake_session = AsyncMock()
 
     with patch.object(data, "fetch_filtered_pool", AsyncMock(return_value=[])) as fp:
-        with patch.object(data, "fetch_vector_neighbors", AsyncMock(return_value={})) as fvn:
+        with patch.object(data, "fetch_desc_vector_neighbors", AsyncMock(return_value={})) as fvn:
             await generate_candidates(fake_session, source, pool_size=10, vector_k=10)
 
     # Confirm we passed the in-memory embedding, not a DB read
@@ -168,7 +168,7 @@ async def test_generate_candidates_skips_vector_pool_when_source_has_no_embeddin
     fake_session = AsyncMock()
 
     with patch.object(data, "fetch_filtered_pool", AsyncMock(return_value=[])):
-        with patch.object(data, "fetch_vector_neighbors", AsyncMock()) as fvn:
+        with patch.object(data, "fetch_desc_vector_neighbors", AsyncMock()) as fvn:
             with patch.object(data, "get_embedding", AsyncMock(return_value=None)):
                 await generate_candidates(fake_session, source, pool_size=10, vector_k=10)
 

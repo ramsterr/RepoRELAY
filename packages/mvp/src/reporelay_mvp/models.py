@@ -59,6 +59,20 @@ class ScoredRecommendation(BaseModel):
     )
 
 
+class RecommendationGroup(BaseModel):
+    label: str = Field(description="Category label, e.g. 'Semantic Matches', 'Language-Based'")
+    signal: str = Field(description="Primary signal that defines this group")
+    repos: list[ScoredRepo]
+
+
+class CategorizedRecommendation(BaseModel):
+    source_repo: str
+    flat_repos: list[ScoredRepo] = Field(default_factory=list)
+    groups: list[RecommendationGroup] = Field(default_factory=list)
+    from_cache: bool = False
+    embed_status: dict[str, str] = Field(default_factory=dict)
+
+
 @dataclass
 class Features:
     language_match: float

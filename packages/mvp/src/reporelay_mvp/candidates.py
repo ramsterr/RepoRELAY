@@ -1,24 +1,19 @@
 """
 Stage 3 of the MVP pipeline: candidate generation.
 
-Two-stage filter:
-  1. SQL filter for "same language or topic overlap" — uses the GIN +
-     btree indexes, fast even on a large DB.
-  2. pgvector ANN on the source repo's embedding — narrows to the
-     most content-similar repos.
+Three pools, merged and deduplicated:
+  1. SQL pool: same language OR topic overlap — uses GIN + btree indexes.
+  2. README-vs-desc vector pool: source's README embedding against DB's
+     description_embedding column (pgvector ANN on the 11K-strong column).
+  3. Description-vs-desc vector pool: source's description embedding
+     against DB's description_embedding column.
 
-The two sets are merged by id and de-duplicated. The result is a
-small pool (~150-250 candidates) that the scorer can evaluate cheaply.
-Each candidate also carries its cosine similarity (0.5 for SQL-only
-hits that have no embedding-based score).
-
-When `seed` is not None, the merged pool is shuffled deterministically
-with `random.Random(seed)` so different seeds produce different result
-orderings while the same seed always produces the same ordering.
+The result is a pool of ~300-400 candidates ready for scoring.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 
@@ -37,49 +32,42 @@ async def generate_candidates(
     source: Repo,
     *,
     pool_size: int = 250,
-    vector_k: int = 150,
+    vector_k: int = 100,
     seed: int | None = None,
     tags: list[str] | None = None,
 ) -> list[tuple[Repo, float]]:
-    sql_pool = await data.fetch_filtered_pool(
-        session,
-        repo_id=source.id,
-        language=source.language,
-        topics=source.topics,
-        limit=pool_size,
-    )
+    from reporelay_mvp.data import get_session, is_real_vector
 
-    # Use the in-memory source.embedding (freshly computed by the
-    # caller). Falls back to a DB read only if the in-memory one is
-    # missing/zero — this happens when the source was loaded by a code
-    # path that didn't run the live embed (e.g. relevance feedback
-    # virtual source, or a cached Repo that hasn't been re-fetched).
-    from reporelay_mvp.data import is_real_vector
-    source_emb = source.embedding
-    if not is_real_vector(source_emb):
-        source_emb = await data.get_embedding(session, source.id) or source_emb
+    # Use SEPARATE sessions for each query so they truly run in parallel
+    # via asyncio.gather. A single SQLAlchemy AsyncSession serializes
+    # concurrent queries because it uses one DB connection.
+    s1, s2 = await get_session(), await get_session()
 
-    vector_pool: dict[int, tuple[Repo, float]] = {}
-    if is_real_vector(source_emb):
-        vector_pool = await data.fetch_vector_neighbors(
-            session,
-            source_embedding=source_emb,
-            exclude_id=source.id,
-            limit=vector_k,
+    try:
+        sql_coro = data.fetch_filtered_pool(
+            s1, repo_id=source.id, language=source.language,
+            topics=source.topics, limit=pool_size,
         )
-    else:
-        logger.info(
-            "source %s has no real embedding — vector pool is empty (sql pool will dominate)",
-            source.full_name,
-        )
+        readme_vs_desc_coro = _vector_coro(s2, source, source.embedding, vector_k, "embedding")
+        desc_vs_desc_coro = _vector_coro(session, source, source.description_embedding, vector_k, "description_embedding")
 
+        sql_pool, readme_vs_desc_pool, desc_vs_desc_pool = await asyncio.gather(
+            sql_coro, readme_vs_desc_coro, desc_vs_desc_coro,
+        )
+    finally:
+        await s1.close()
+        await s2.close()
+
+    # Merge and deduplicate
     merged: list[tuple[Repo, float]] = []
     seen: set[int] = set()
-    for repo, sim in vector_pool.values():
-        if repo.id in seen:
-            continue
-        seen.add(repo.id)
-        merged.append((repo, sim))
+
+    for pool in (readme_vs_desc_pool, desc_vs_desc_pool):
+        for repo, sim in pool.values():
+            if repo.id in seen:
+                continue
+            seen.add(repo.id)
+            merged.append((repo, sim))
 
     for repo in sql_pool:
         if repo.id in seen:
@@ -87,32 +75,33 @@ async def generate_candidates(
         seen.add(repo.id)
         merged.append((repo, NEUTRAL_SIM))
 
-    # tag filtering — keep only repos that have at least one requested tag
     if tags:
         tag_set = {t.lower() for t in tags}
-        filtered = [
-            (repo, sim) for repo, sim in merged if tag_set & {t.lower() for t in repo.topics}
-        ]
+        filtered = [(repo, sim) for repo, sim in merged if tag_set & {t.lower() for t in repo.topics}]
         if filtered:
             merged = filtered
-            logger.info("tag filter: %d candidates after filtering by %s", len(merged), tags)
         else:
-            logger.warning(
-                "tag filter eliminated all %d candidates for tags=%s — returning unfiltered pool",
-                len(merged),
-                tags,
-            )
+            logger.warning("tag filter eliminated all %d candidates for tags=%s", len(merged), tags)
 
     if seed is not None:
         rng = random.Random(seed)
         rng.shuffle(merged)
 
     logger.info(
-        "candidate pool: sql=%d vector=%d merged=%d seed=%s tags=%s",
-        len(sql_pool),
-        len(vector_pool),
-        len(merged),
-        seed,
-        tags,
+        "candidate pool: sql=%d readme_vs_desc=%d desc_vs_desc=%d merged=%d",
+        len(sql_pool), len(readme_vs_desc_pool), len(desc_vs_desc_pool), len(merged),
     )
     return merged
+
+
+async def _vector_coro(
+    session: AsyncSession, source: Repo, vec: list[float] | None,
+    vector_k: int, tag: str,
+) -> dict[int, tuple[Repo, float]]:
+    from reporelay_mvp.data import is_real_vector
+    if is_real_vector(vec):
+        return await data.fetch_desc_vector_neighbors(
+            session, source_embedding=vec, exclude_id=source.id, limit=vector_k,
+        )
+    logger.info("source %s has no real %s — skipping vector pool for it", source.full_name, tag)
+    return {}

@@ -304,17 +304,19 @@ pip install myproject
 
 
 class TestWeightRebalancing:
-    """Tests for the new weight distribution in score.py."""
+    """Tests for the weight distribution in score.py."""
 
     def test_weights_sum_to_one(self):
         from reporelay_mvp.score import WEIGHTS, TAG_WEIGHTS
         assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9
         assert abs(sum(TAG_WEIGHTS.values()) - 1.0) < 1e-9
 
-    def test_cosine_sim_is_primary_signal(self):
+    def test_readme_vs_desc_is_primary_signal(self):
         from reporelay_mvp.score import WEIGHTS
-        # cosine_sim (README embedding) should be the highest single feature
-        assert WEIGHTS["cosine_sim"] >= max(v for k, v in WEIGHTS.items() if k != "cosine_sim")
+        # readme_vs_desc_cosine_sim is the strongest individual signal
+        assert WEIGHTS["readme_vs_desc_cosine_sim"] >= max(
+            v for k, v in WEIGHTS.items() if k != "readme_vs_desc_cosine_sim"
+        )
 
     def test_readme_topic_sim_is_enabled(self):
         from reporelay_mvp.score import WEIGHTS
@@ -322,29 +324,24 @@ class TestWeightRebalancing:
 
     def test_surface_signals_reduced(self):
         from reporelay_mvp.score import WEIGHTS
-        # Surface signals (language, deps, popularity) should be small
         assert WEIGHTS["language_match"] <= 0.05
         assert WEIGHTS["dep_overlap"] <= 0.10
-        assert WEIGHTS["popularity_sim"] <= 0.06
+        assert WEIGHTS["star_ratio"] <= 0.10
 
     def test_semantic_signals_dominate(self):
         from reporelay_mvp.score import WEIGHTS
-        # Semantic signals (description_cosine, topic_overlap, readme_topic,
-        # cosine_sim, readme_vs_desc_cosine) should be the majority of the weight
         semantic_weight = (
             WEIGHTS["description_cosine_sim"]
             + WEIGHTS["topic_overlap"]
             + WEIGHTS["readme_topic_sim"]
-            + WEIGHTS["cosine_sim"]
             + WEIGHTS["readme_vs_desc_cosine_sim"]
         )
-        assert semantic_weight >= 0.60  # at least 60% of the weight is semantic
+        assert semantic_weight >= 0.65
 
     def test_seed_does_not_triple_popularity(self):
         from reporelay_mvp.score import _get_weights
         w = _get_weights(seed=42, has_desc_emb=True, has_readme_emb=True)
-        # popularity should be at most 1.5x the base weight
-        assert w["popularity_sim"] <= 0.10  # base 0.05 * max 1.3x + 10% jitter
+        assert w["star_ratio"] <= 0.20
 
 
 class TestScoreRepository:

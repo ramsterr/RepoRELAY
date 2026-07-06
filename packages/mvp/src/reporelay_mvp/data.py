@@ -537,35 +537,67 @@ async def fetch_vector_neighbors(
     exclude_id: int,
     limit: int,
 ) -> dict[int, tuple[Repo, float]]:
+    """pgvector ANN on the `embedding` (README) column — legacy path.
+    
+    Only 355/11918 repos have README embeddings, so this pool is small.
+    Prefer fetch_desc_vector_neighbors which uses the description_embedding
+    column (11217/11918 repos).
     """
-    pgvector ANN: nearest neighbors of an arbitrary source embedding,
-    excluding one repo by id.
+    return await _fetch_vector_neighbors(
+        session, source_embedding=source_embedding,
+        exclude_id=exclude_id, limit=limit,
+        column="embedding",
+    )
 
-    The source embedding is passed in directly (not joined from the
-    mvp_repos table) so the caller can use a freshly-computed vector
-    without first having to persist it. This is critical for the
-    "paste a new GitHub URL" flow — we just computed the README vector
-    in-process, and we want to use it immediately to find similar repos
-    in the DB rather than waiting for the HNSW index to reflect a write.
 
+async def fetch_desc_vector_neighbors(
+    session: AsyncSession,
+    *,
+    source_embedding: list[float],
+    exclude_id: int,
+    limit: int,
+) -> dict[int, tuple[Repo, float]]:
+    """pgvector ANN on the `description_embedding` column.
+
+    This is the PRIMARY vector search path. 11,217 out of 11,918 repos
+    have description embeddings — 30x more than the README embedding
+    column. The source's README and description embeddings are compared
+    against this column.
+    """
+    return await _fetch_vector_neighbors(
+        session, source_embedding=source_embedding,
+        exclude_id=exclude_id, limit=limit,
+        column="description_embedding",
+    )
+
+
+async def _fetch_vector_neighbors(
+    session: AsyncSession,
+    *,
+    source_embedding: list[float],
+    exclude_id: int,
+    limit: int,
+    column: str,
+) -> dict[int, tuple[Repo, float]]:
+    """pgvector ANN: nearest neighbors of a source embedding against a column.
+    
+    The source embedding is passed in directly (in-memory, freshly computed).
+    No DB join — we use CAST(:param AS vector) for the computation.
+    
     Returns a dict mapping repo_id -> (Repo, cosine_similarity).
-    Returns an empty dict if source_embedding is empty/zero.
+    Returns an empty dict if source_embedding is empty/zero/NaN.
     """
     if not source_embedding or all(v == 0.0 for v in source_embedding):
         return {}
     rows = await session.execute(
         text(
-            """
-            SELECT
-                mvp_repos.id, mvp_repos.owner, mvp_repos.name,
-                mvp_repos.full_name, mvp_repos.description,
-                mvp_repos.language, mvp_repos.topics, mvp_repos.stars,
-                mvp_repos.dependencies,
-                1 - (mvp_repos.embedding <=> CAST(:source_embedding AS vector)) AS cosine_sim
+            f"""
+            SELECT {EXPECTED_COLUMNS},
+                   1 - ({column} <=> CAST(:source_embedding AS vector)) AS cosine_sim
             FROM mvp_repos
             WHERE mvp_repos.id != :exclude_id
-              AND mvp_repos.embedding IS NOT NULL
-            ORDER BY mvp_repos.embedding <=> CAST(:source_embedding AS vector)
+              AND {column} IS NOT NULL
+            ORDER BY {column} <=> CAST(:source_embedding AS vector)
             LIMIT :limit
             """
         ),
@@ -579,25 +611,17 @@ async def fetch_vector_neighbors(
     skipped_zero = 0
     for row in rows:
         repo = _row_to_repo(row)
-        # Guard: skip candidates whose embedding is all zeros.
-        # Old quick_save wrote [0.0]*512 for repos that haven't been
-        # embedded yet — these pass `embedding IS NOT NULL` in SQL
-        # but produce meaningless cosine distances (pgvector returns
-        # ≈1.0 for zero-vectors, making them look like perfect matches).
-        if not is_real_vector(repo.embedding):
+        vec = repo.description_embedding if column == "description_embedding" else repo.embedding
+        if not is_real_vector(vec):
             skipped_zero += 1
             continue
         sim = float(row._mapping["cosine_sim"])
-        # Final safety: clamp cosine similarity to [0, 1].  pgvector
-        # can return values slightly outside this range for degenerate
-        # vectors (e.g. very small norms).  We want features to stay
-        # in [0, 1] so the weighted scorer behaves predictably.
         sim = max(0.0, min(1.0, sim))
         result[repo.id] = (repo, sim)
     if skipped_zero:
         logger.info(
-            "fetch_vector_neighbors: skipped %d candidates with zero embeddings",
-            skipped_zero,
+            "_fetch_vector_neighbors(%s): skipped %d candidates with zero embeddings",
+            column, skipped_zero,
         )
     return result
 

@@ -523,8 +523,7 @@ class TestScoring:
     @pytest.mark.asyncio
     async def test_score_many_weights_reflect_real_embeddings(self):
         """When the source has real embeddings, the scoring weights must
-        include cosine_sim (0.10) and description_cosine_sim (0.29) —
-        not redistribute them away."""
+        include all semantic signals — not redistribute them away."""
         from reporelay_mvp.score import _get_weights
 
         weights = _get_weights(
@@ -537,12 +536,13 @@ class TestScoring:
 
         assert "cosine_sim" in weights, "cosine_sim weight missing when readme embedding exists"
         assert "description_cosine_sim" in weights, "description_cosine_sim weight missing when desc embedding exists"
+        assert "readme_vs_desc_cosine_sim" in weights, "readme_vs_desc_cosine_sim weight missing"
         assert weights["cosine_sim"] > 0.0
         assert weights["description_cosine_sim"] > 0.0
-        # These are the two most important weights — they should be significant
-        assert weights["description_cosine_sim"] >= 0.20, (
-            "description_cosine_sim should be a major signal (≥0.20)"
-        )
+        assert weights["readme_vs_desc_cosine_sim"] > 0.0
+        # All three embedding-based signals should be significant
+        assert weights["cosine_sim"] >= 0.10, "cosine_sim should be ≥0.10"
+        assert weights["readme_vs_desc_cosine_sim"] >= 0.10, "readme_vs_desc_cosine_sim should be ≥0.10"
 
 
 # ── 5. FAILURE HANDLING ─────────────────────────────────────────────

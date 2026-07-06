@@ -329,13 +329,14 @@ class TestWeightRebalancing:
 
     def test_semantic_signals_dominate(self):
         from reporelay_mvp.score import WEIGHTS
-        # Semantic signals (description_cosine, topic_overlap, readme_topic, cosine_sim)
-        # should be the majority of the weight
+        # Semantic signals (description_cosine, topic_overlap, readme_topic,
+        # cosine_sim, readme_vs_desc_cosine) should be the majority of the weight
         semantic_weight = (
             WEIGHTS["description_cosine_sim"]
             + WEIGHTS["topic_overlap"]
             + WEIGHTS["readme_topic_sim"]
             + WEIGHTS["cosine_sim"]
+            + WEIGHTS["readme_vs_desc_cosine_sim"]
         )
         assert semantic_weight >= 0.60  # at least 60% of the weight is semantic
 

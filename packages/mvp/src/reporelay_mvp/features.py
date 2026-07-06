@@ -71,7 +71,7 @@ def _weighted_jaccard(a: list[str], b: list[str]) -> float:
     return inter_weight / union_weight
 
 
-def compute_features(source: Repo, candidate: Repo, *, cosine_sim: float, filter_cosine_sim: float = 0.0, description_cosine_sim: float = 0.0, readme_topic_sim: float = 0.0) -> Features:
+def compute_features(source: Repo, candidate: Repo, *, cosine_sim: float, filter_cosine_sim: float = 0.0, description_cosine_sim: float = 0.0, readme_topic_sim: float = 0.0, readme_vs_desc_cosine_sim: float = 0.0) -> Features:
     src_lang = source.language
     cand_lang = candidate.language
     same_lang = 1.0 if (src_lang and cand_lang and src_lang == cand_lang) else 0.0
@@ -84,6 +84,7 @@ def compute_features(source: Repo, candidate: Repo, *, cosine_sim: float, filter
         description_sim=_description_sim(source.description, candidate.description),
         description_cosine_sim=_clamp(description_cosine_sim),
         readme_topic_sim=_clamp(readme_topic_sim),
+        readme_vs_desc_cosine_sim=_clamp(readme_vs_desc_cosine_sim),
         dep_overlap=_jaccard(source.dependencies, candidate.dependencies),
         popularity_sim=_popularity_sim(source.stars, candidate.stars),
         star_ratio=_star_ratio(source.stars, candidate.stars),

@@ -35,32 +35,34 @@ logger = logging.getLogger(__name__)
 WEIGHTS: dict[str, float] = {
     "language_match":          0.03,
     "topic_overlap":           0.10,
-    "cosine_sim":              0.22,
+    "cosine_sim":              0.16,
     "description_sim":         0.03,
-    "description_cosine_sim":  0.20,
-    "readme_topic_sim":        0.18,
-    "dep_overlap":             0.07,
+    "description_cosine_sim":  0.13,
+    "readme_topic_sim":        0.15,
+    "readme_vs_desc_cosine_sim": 0.13,
+    "dep_overlap":             0.06,
     "popularity_sim":          0.03,
     "star_ratio":              0.04,
     "trending_boost":          0.02,
     "quality_signal":          0.03,
-    "language_diversity":      0.05,
+    "language_diversity":      0.09,
 }
 
 TAG_WEIGHTS: dict[str, float] = {
     "language_match":          0.02,
     "topic_overlap":           0.06,
-    "cosine_sim":              0.17,
+    "cosine_sim":              0.11,
     "description_sim":         0.02,
-    "description_cosine_sim":  0.15,
-    "readme_topic_sim":        0.12,
+    "description_cosine_sim":  0.09,
+    "readme_topic_sim":        0.11,
+    "readme_vs_desc_cosine_sim": 0.09,
     "filter_cosine_sim":       0.25,
     "dep_overlap":             0.05,
     "popularity_sim":          0.02,
     "star_ratio":              0.03,
     "trending_boost":          0.02,
     "quality_signal":          0.02,
-    "language_diversity":      0.07,
+    "language_diversity":      0.11,
 }
 
 
@@ -72,19 +74,19 @@ def _embedding_weights(
     w = dict(weights)
 
     if not has_readme_emb:
-        moved = w.pop("cosine_sim", 0.0)
-        if moved > 0:
-            half = moved / 2
-            w["topic_overlap"] = w.get("topic_overlap", 0.20) + half
-            w["description_sim"] = w.get("description_sim", 0.04) + half
+        # Source has no README embedding — can't compute cosine_sim or
+        # readme_vs_desc_cosine_sim. Redistribute their weights to the
+        # features that still work.
+        for key in ("cosine_sim", "readme_vs_desc_cosine_sim"):
+            moved = w.pop(key, 0.0)
+            if moved > 0:
+                half = moved / 2
+                w["topic_overlap"] = w.get("topic_overlap", 0.0) + half
+                w["readme_topic_sim"] = w.get("readme_topic_sim", 0.0) + half
 
     if not has_desc_emb:
         moved = w.pop("description_cosine_sim", 0.0)
         if moved > 0:
-            # Redistribute the description_cosine_sim weight intelligently:
-            # - half goes to description_sim (the weaker bag-of-words fallback)
-            # - half goes to readme_topic_sim (which uses README keywords that
-            #   are still available even when the description is missing)
             half = moved / 2
             w["description_sim"] = w.get("description_sim", 0.0) + half
             w["readme_topic_sim"] = w.get("readme_topic_sim", 0.0) + half
@@ -219,6 +221,19 @@ async def score_many(
             scores = cosine_batch_one_vs_many(source.description_embedding, vecs_ordered)
             desc_cosine_by_id = dict(zip(ids_ordered, scores, strict=True))
 
+    # Cross-modal: source README vs candidate descriptions.
+    # Most DB repos have description_embedding but not embedding (README).
+    # The source's README is the richest signal — compare it against the
+    # most available vector in the corpus (description embeddings).
+    readme_vs_desc_by_id: dict[int, float] = {}
+    if source_has_readme_emb:
+        # Reuse the desc_embs we already fetched (same batch)
+        if desc_embs:
+            ids_ordered = [c.id for c, _ in candidates if c.id in desc_embs]
+            vecs_ordered = [desc_embs[cid] for cid in ids_ordered]
+            scores = cosine_batch_one_vs_many(source.embedding, vecs_ordered)
+            readme_vs_desc_by_id = dict(zip(ids_ordered, scores, strict=True))
+
     if filter_embedding:
         candidate_ids = [c.id for c, _ in candidates]
         if candidate_ids:
@@ -249,9 +264,11 @@ async def score_many(
         fc = fc_by_id.get(cand.id, 0.0)
         desc_cos = desc_cosine_by_id.get(cand.id, 0.0)
         rts = rts_by_id.get(cand.id, 0.0) if has_readme else 0.0
+        rvd = readme_vs_desc_by_id.get(cand.id, 0.0)
         features = compute_features(
             source, cand, cosine_sim=cosine_sim, filter_cosine_sim=fc,
             description_cosine_sim=desc_cos, readme_topic_sim=rts,
+            readme_vs_desc_cosine_sim=rvd,
         )
         s = score_repo(features, seed=seed, use_tags=use_tags,
                         has_readme_emb=source_has_readme_emb,

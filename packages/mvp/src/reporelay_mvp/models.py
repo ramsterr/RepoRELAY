@@ -67,6 +67,7 @@ class Features:
     description_sim: float = 0.0
     description_cosine_sim: float = 0.0
     readme_topic_sim: float = 0.0
+    readme_vs_desc_cosine_sim: float = 0.0
     dep_overlap: float = 0.0
     popularity_sim: float = 0.0
     star_ratio: float = 0.0
@@ -83,6 +84,7 @@ class Features:
             "description_sim": self.description_sim,
             "description_cosine_sim": self.description_cosine_sim,
             "readme_topic_sim": self.readme_topic_sim,
+            "readme_vs_desc_cosine_sim": self.readme_vs_desc_cosine_sim,
             "dep_overlap": self.dep_overlap,
             "popularity_sim": self.popularity_sim,
             "star_ratio": self.star_ratio,

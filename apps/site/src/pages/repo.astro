@@ -159,7 +159,6 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   function renderRepoCard(r) {
     var idx = pickedRepos.indexOf(r.full_name);
     var checked = idx !== -1;
-    var otherTopics = (r.topics || []).filter(function (t) { return (r.shared_topics || []).indexOf(t) === -1; }).slice(0, 3);
     return '<div class="card' + (checked ? " card-picked" : "") + '" data-repo="' + r.full_name + '">' +
       '<label class="card-check"><input type="checkbox"' + (checked ? " checked" : "") + ' data-repo="' + r.full_name + '" /></label>' +
       '<div class="card-top">' +
@@ -169,10 +168,12 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
       '<div class="card-desc">' + (esc(r.description || "") || "(no description)") + '</div>' +
       '<div class="card-meta">' +
       '<span class="score-dot ' + scoreColor(r.score) + '"></span>' +
-      '<span class="badge badge-lang" style="font-size:0.65rem;">' + matchLabel(r.features) + '</span>';
+      '<span class="badge badge-lang" style="font-size:0.65rem;">' + matchLabel(r.features) + '</span>' +
+      renderRepoBadges(r) +
+      '</div></div>';
   }
 
-  function renderRepoFooter(r) {
+  function renderRepoBadges(r) {
     var html = '';
     if (r.shared_language) html += '<span class="badge badge-shared-lang">' + r.language + '</span>';
     if (r.shared_topics && r.shared_topics.length > 0) html += '<span class="badge badge-shared-topics">' + r.shared_topics.join(", ") + '</span>';
@@ -187,7 +188,7 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   function renderResults(repos) {
     var html = "";
     for (var i = 0; i < repos.length; i++) {
-      html += renderRepoCard(repos[i]) + renderRepoFooter(repos[i]) + '</div></div>';
+      html += renderRepoCard(repos[i]);
     }
     return html;
   }
@@ -200,27 +201,7 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         '<h3 class="group-label">' + group.label +
         ' <span class="group-signal">(' + group.signal + ')</span></h3>';
       for (var i = 0; i < group.repos.length; i++) {
-        var r = group.repos[i];
-        var idx = pickedRepos.indexOf(r.full_name);
-        var checked = idx !== -1;
-        html += '<div class="card' + (checked ? " card-picked" : "") + '" data-repo="' + r.full_name + '">' +
-          '<label class="card-check"><input type="checkbox"' + (checked ? " checked" : "") + ' data-repo="' + r.full_name + '" /></label>' +
-          '<div class="card-top">' +
-          '<a class="card-repo" href="https://github.com/' + r.full_name + '" target="_blank" rel="noopener">' + r.full_name + '</a>' +
-          '<span class="stars">' + fmt(r.stars) + ' \u2605</span>' +
-          '</div>' +
-          '<div class="card-desc">' + (esc(r.description || "") || "(no description)") + '</div>' +
-          '<div class="card-meta">' +
-          '<span class="score-dot ' + scoreColor(r.score) + '"></span>' +
-          '<span class="badge badge-lang" style="font-size:0.65rem;">' + matchLabel(r.features) + '</span>';
-        if (r.shared_language) html += '<span class="badge badge-shared-lang">' + r.language + '</span>';
-        if (r.shared_topics && r.shared_topics.length > 0) html += '<span class="badge badge-shared-topics">' + r.shared_topics.join(", ") + '</span>';
-        if (r.language && !r.shared_language) html += '<span class="badge badge-lang">' + r.language + '</span>';
-        var otherTopics = (r.topics || []).filter(function (t) { return (r.shared_topics || []).indexOf(t) === -1; }).slice(0, 3);
-        for (var j = 0; j < otherTopics.length; j++) {
-          html += '<span class="pill">' + otherTopics[j] + '</span>';
-        }
-        html += '</div></div>';
+        html += renderRepoCard(group.repos[i]);
       }
       html += '</div>';
     }
@@ -253,7 +234,7 @@ const API_URL = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         var el = document.getElementById("results-loading");
         if (el) el.innerHTML = 'embedding repo via Gemini API...<br><span style="font-size:0.75rem;opacity:0.7">first visit takes ~7s while we fetch README + compute vectors</span>';
       },
-    }, 0)
+    }, 1)
       .then(function (data) {
         var groups = data.groups || [];
         var repos = data.flat_repos || data.repos || [];

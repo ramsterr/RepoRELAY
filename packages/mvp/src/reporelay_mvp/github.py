@@ -59,6 +59,21 @@ def _auth_client(token: str) -> httpx.AsyncClient:
     )
 
 
+# ── Token rotation: use GITHUB_TOKEN_2 as fallback when primary is rate-limited ──
+_active_github_token_index = 0
+
+
+def _get_active_token() -> str:
+    """Return the currently active GitHub token, rotating on rate limit."""
+    from reporelay_mvp.settings import get_mvp_settings
+
+    settings = get_mvp_settings()
+    tokens = [t for t in (settings.github_token, settings.github_token_2) if t]
+    if not tokens:
+        return ""
+    return tokens[_active_github_token_index % len(tokens)]
+
+
 async def _get(client: httpx.AsyncClient, path: str, **params: Any) -> dict[str, Any]:
     response = await client.get(path, params=params, follow_redirects=True)
     if response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0":
@@ -152,11 +167,27 @@ async def _pace_github_request() -> None:
 
 async def _handle_github_rate_limit(response: Any) -> None:
     """Sleep until GitHub rate limit resets, based on response headers."""
+    global _active_github_token_index
+
     retry_after = response.headers.get("Retry-After")
     reset_at = response.headers.get("X-RateLimit-Reset")
+    remaining = int(response.headers.get("X-RateLimit-Remaining", "1"))
+
+    if remaining > 0:
+        # Not rate-limited on this token — just respect Retry-After
+        if retry_after:
+            wait = float(retry_after)
+            logger.warning("GitHub Retry-After: sleeping %.0fs", wait)
+            await asyncio.sleep(wait)
+        return
+
+    # Rate limited. Switch to the next token if available.
+    _active_github_token_index += 1
+    next_token = _get_active_token()[:15] + "..."
+    logger.warning("GitHub token rate limited — switched to token %s (index %d)", next_token, _active_github_token_index)
+
     if retry_after:
         wait = float(retry_after)
-        logger.warning("GitHub Retry-After: sleeping %.0fs", wait)
         await asyncio.sleep(wait)
     elif reset_at:
         now = time.time()
@@ -164,7 +195,7 @@ async def _handle_github_rate_limit(response: Any) -> None:
         logger.warning("GitHub rate limit resets in %.0fs", wait)
         await asyncio.sleep(wait)
     else:
-        # Fallback: wait 60s
+        await asyncio.sleep(60)
         logger.warning("GitHub rate limited, sleeping 60s")
         await asyncio.sleep(60)
 
@@ -229,7 +260,7 @@ async def fetch_all(owner: str, name: str) -> dict[str, Any]:
     timeout = httpx.Timeout(12.0, connect=5.0)
 
     try:
-        async with _auth_client(settings.github_token) as client:
+        async with _auth_client(_get_active_token()) as client:
             # Fire all 4 requests at once — one roundtrip
             metadata_coro = fetch_repo_metadata(client, owner, name)
             topics_coro = fetch_topics(client, owner, name)

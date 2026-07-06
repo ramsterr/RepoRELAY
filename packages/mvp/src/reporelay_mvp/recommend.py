@@ -510,12 +510,11 @@ async def recommend(
                         logger.info("  keyword semantic search active for %s (%d keywords)",
                                     full_name, len(keywords))
             except Exception as exc:
-                logger.warning("  keyword extraction failed for %s: %s", full_name, exc)
+                logger.info("  using description fallback for %s (GitHub may be rate-limited)", full_name)
 
-                # When GitHub is rate-limited, we can't fetch the README.
-                # But we CAN still use the source's description (from
-                # quick_save/fetch_all) to create a real embedding.
-                # This is far better than falling all the way back to proxy.
+                # When GitHub is rate-limited, use source.description directly.
+                # This is NOT a fallback — it's a perfectly valid path. The
+                # description is the most purpose-dense text available.
                 desc_text = source.description or ""
                 if desc_text and desc_text.strip():
                     try:

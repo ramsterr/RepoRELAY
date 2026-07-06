@@ -147,7 +147,7 @@ async def preloadModel() -> None:
 async def _embed_via_gemini(text_value: str) -> list[float]:
     """Call Google Gemini gemini-embedding-001 with output_dimensionality=512.
 
-    Uses 30s timeout with 3 retries and brief backoff. Accepts both
+    Uses 45s timeout with 3 retries and brief backoff. Accepts both
     {'embedding': [...]} and {'embeddings': [[...]]} response shapes.
     """
     if not text_value or not text_value.strip():
@@ -181,9 +181,9 @@ async def _embed_via_gemini(text_value: str) -> list[float]:
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_call), timeout=30.0)
+            return await asyncio.wait_for(asyncio.to_thread(_call), timeout=45.0)
         except asyncio.TimeoutError:
-            last_exc = RuntimeError(f"Gemini embed timed out after 30s (attempt {attempt + 1}/3)")
+            last_exc = RuntimeError(f"Gemini embed timed out after 45s (attempt {attempt + 1}/3)")
             logger.warning("Gemini embed attempt %d timed out", attempt + 1)
         except Exception as exc:
             last_exc = exc

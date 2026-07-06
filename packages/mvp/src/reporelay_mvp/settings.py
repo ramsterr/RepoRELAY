@@ -23,6 +23,7 @@ class MvpSettings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://reporelay:reporelay@localhost:5439/reporelay"
     github_token: str = ""
+    github_token_2: str = ""
 
     embedding_dim: int = 512
     gemini_api_key: str = ""

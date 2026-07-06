@@ -330,13 +330,16 @@ class TestWeightRebalancing:
 
     def test_semantic_signals_dominate(self):
         from reporelay_mvp.score import WEIGHTS
+        # All semantic signals combined should dominate
         semantic_weight = (
             WEIGHTS["description_cosine_sim"]
             + WEIGHTS["topic_overlap"]
             + WEIGHTS["readme_topic_sim"]
             + WEIGHTS["readme_vs_desc_cosine_sim"]
+            + WEIGHTS["keyword_match"]
+            + WEIGHTS["keyword_topic_match"]
         )
-        assert semantic_weight >= 0.65
+        assert semantic_weight >= 0.70
 
     def test_seed_does_not_triple_popularity(self):
         from reporelay_mvp.score import _get_weights

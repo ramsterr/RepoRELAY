@@ -85,6 +85,8 @@ def compute_features(source: Repo, candidate: Repo, *, cosine_sim: float, filter
         description_cosine_sim=_clamp(description_cosine_sim),
         readme_topic_sim=_clamp(readme_topic_sim),
         readme_vs_desc_cosine_sim=_clamp(readme_vs_desc_cosine_sim),
+        keyword_match=_keyword_jaccard(source.keywords, candidate.keywords),
+        keyword_topic_match=_keyword_topic_overlap(source.keywords, candidate.topics),
         dep_overlap=_jaccard(source.dependencies, candidate.dependencies),
         popularity_sim=_popularity_sim(source.stars, candidate.stars),
         star_ratio=_star_ratio(source.stars, candidate.stars),
@@ -265,3 +267,55 @@ def readme_topic_sim(source_tokens: set[str], candidate_topics: list[str]) -> fl
                 matches += 1
                 break
     return matches / len(source_tokens)
+
+
+# ── Keyword-based features ──────────────────────────────────────────
+
+def _keyword_jaccard(src_keywords: list[str], cand_keywords: list[str]) -> float:
+    """Jaccard similarity of extracted keyword sets.
+
+    Captures domain overlap: both repos mention "data science",
+    "machine learning", "curriculum" — they serve the same purpose
+    even if they have different GitHub topics.
+    """
+    if not src_keywords or not cand_keywords:
+        return 0.0
+    a = {k.lower() for k in src_keywords}
+    b = {k.lower() for k in cand_keywords}
+    union = a | b
+    if not union:
+        return 0.0
+    inter = a & b
+    return len(inter) / len(union)
+
+
+def _keyword_topic_overlap(keywords: list[str], topics: list[str]) -> float:
+    """What fraction of extracted keywords match GitHub topic tags?
+
+    Bridges keyword extraction with topic matching. If the source
+    keywords include "data science" and the candidate has topics
+    ["data-science", "machine-learning"], this feature captures
+    that overlap even when the exact string forms differ.
+    """
+    if not keywords or not topics:
+        return 0.0
+    kw_set = {k.lower() for k in keywords}
+    topic_set = {t.lower() for t in topics}
+
+    # Direct match
+    direct = kw_set & topic_set
+
+    # Substring match: "data science" matches topic "data-science"
+    # or "data-science-education"
+    substring_matches = 0
+    for kw in kw_set - direct:
+        for topic in topic_set - direct:
+            # Normalize: remove hyphens for comparison
+            kw_norm = kw.replace("-", " ").replace(" ", "")
+            topic_norm = topic.replace("-", "").replace(" ", "")
+            if kw_norm in topic_norm or topic_norm in kw_norm:
+                substring_matches += 1
+                break
+
+    total_matches = len(direct) + substring_matches
+    return min(1.0, total_matches / len(kw_set))

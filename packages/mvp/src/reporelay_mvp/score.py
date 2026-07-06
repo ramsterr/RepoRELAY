@@ -35,25 +35,29 @@ logger = logging.getLogger(__name__)
 
 WEIGHTS: dict[str, float] = {
     "language_match":               0.03,
-    "topic_overlap":                0.10,
+    "topic_overlap":                0.07,
     "description_cosine_sim":       0.20,
-    "readme_topic_sim":             0.15,
-    "readme_vs_desc_cosine_sim":    0.30,
+    "readme_topic_sim":             0.12,
+    "readme_vs_desc_cosine_sim":    0.25,
+    "keyword_match":                0.08,
+    "keyword_topic_match":          0.05,
     "dep_overlap":                  0.05,
-    "star_ratio":                   0.08,
+    "star_ratio":                   0.06,
     "language_diversity":           0.07,
     "quality_signal":               0.02,
 }
 
 TAG_WEIGHTS: dict[str, float] = {
     "language_match":               0.02,
-    "topic_overlap":                0.07,
+    "topic_overlap":                0.05,
     "description_cosine_sim":       0.14,
-    "readme_topic_sim":             0.10,
-    "readme_vs_desc_cosine_sim":    0.21,
+    "readme_topic_sim":             0.08,
+    "readme_vs_desc_cosine_sim":    0.16,
     "filter_cosine_sim":            0.28,
+    "keyword_match":                0.06,
+    "keyword_topic_match":          0.04,
     "dep_overlap":                  0.04,
-    "star_ratio":                   0.06,
+    "star_ratio":                   0.05,
     "language_diversity":           0.06,
     "quality_signal":               0.02,
 }
@@ -70,21 +74,23 @@ def _get_weights(
     base = dict(TAG_WEIGHTS if use_tags else WEIGHTS)
 
     # If source has no README embedding, can't compute readme_vs_desc_cosine_sim.
-    # Redistribute to description_cosine_sim and readme_topic_sim.
+    # Redistribute to description_cosine_sim, keyword_match, and readme_topic_sim.
     if not has_readme_emb:
-        moved = base.pop("readme_vs_desc_cosine_sim", 0.30)
+        moved = base.pop("readme_vs_desc_cosine_sim", 0.0)
         if moved > 0:
-            half = moved / 2
-            base["description_cosine_sim"] = base.get("description_cosine_sim", 0.0) + half
-            base["readme_topic_sim"] = base.get("readme_topic_sim", 0.0) + half
+            third = moved / 3
+            base["description_cosine_sim"] = base.get("description_cosine_sim", 0.0) + third
+            base["readme_topic_sim"] = base.get("readme_topic_sim", 0.0) + third
+            base["keyword_topic_match"] = base.get("keyword_topic_match", 0.0) + third
 
     # If source has no description embedding, same treatment
     if not has_desc_emb:
         moved = base.pop("description_cosine_sim", 0.0)
         if moved > 0:
-            half = moved / 2
-            base["readme_vs_desc_cosine_sim"] = base.get("readme_vs_desc_cosine_sim", 0.0) + half
-            base["star_ratio"] = base.get("star_ratio", 0.0) + half
+            third = moved / 3
+            base["readme_vs_desc_cosine_sim"] = base.get("readme_vs_desc_cosine_sim", 0.0) + third
+            base["keyword_match"] = base.get("keyword_match", 0.0) + third
+            base["star_ratio"] = base.get("star_ratio", 0.0) + third
 
     # Boost readme_topic_sim when README tokens are available
     if has_readme_keywords:

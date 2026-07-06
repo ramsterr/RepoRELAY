@@ -231,6 +231,54 @@ async def _find_proxy_embedding(session: Any, source: Repo) -> list[float] | Non
     return best_embedding
 
 
+async def _find_desc_proxy_embedding(session: Any, source: Repo) -> list[float] | None:
+    """Same as _find_proxy_embedding but for description_embedding column."""
+    if not source.topics:
+        return None
+
+    import math as _math
+    from sqlalchemy import text
+
+    rows = await session.execute(
+        text(
+            """
+            SELECT id, description_embedding, topics, language, stars
+            FROM mvp_repos
+            WHERE description_embedding IS NOT NULL
+              AND topics && :topics
+            ORDER BY stars DESC
+            LIMIT 20
+            """
+        ),
+        {"topics": source.topics},
+    )
+    best_id = None
+    best_embedding = None
+    best_score = -1.0
+    source_set = set(source.topics)
+    src_lang = source.language
+    src_stars = max(1, source.stars)
+    for row in rows:
+        cand_topics = list(row.topics or [])
+        overlap = len(source_set & set(cand_topics))
+        lang_score = 1.0 if (src_lang and getattr(row, "language", None) == src_lang) else 0.0
+        star_score = min(1.0, _math.log1p(max(1, getattr(row, "stars", 0) or 0)) / _math.log1p(src_stars))
+        composite = overlap * 0.5 + lang_score * 0.3 + star_score * 0.2
+        if composite > best_score:
+            best_score = composite
+            best_id = row.id
+            desc_raw = row.description_embedding
+            if isinstance(desc_raw, list):
+                best_embedding = [float(x) for x in desc_raw]
+
+    if best_embedding:
+        logger.info(
+            "proxy desc embedding from repo %d (topic overlap=%d, topics=%s)",
+            best_id, best_score, source.topics,
+        )
+    return best_embedding
+
+
 async def recommend(
     full_name: str,
     *,
@@ -322,7 +370,7 @@ async def recommend(
             if source is None:
                 raise LookupError(f"failed to persist repo {full_name!r}")
 
-        # ── Step 2: Embed if needed ──────────────────────────────────────
+        # ── Step 2: Ensure source has vectors ────────────────────────────
         from reporelay_mvp.data import is_real_vector
 
         source_has_desc_emb = is_real_vector(source.description_embedding)
@@ -336,61 +384,60 @@ async def recommend(
         source_readme_tokens: set[str] | None = None
 
         if source_needs_embed:
-            gh = await fetch_all(owner, name)
-            readme_text = gh.get("readme", "")
+            # ── Proxy-first: borrow embedding from similar repo NOW ──────
+            # This gives instant pgvector results. Real embedding happens
+            # in the background so NEXT visit uses real vectors.
+            if not source_has_readme_emb:
+                proxy_emb = await _find_proxy_embedding(session, source)
+                if proxy_emb:
+                    source = source.model_copy(update={"embedding": proxy_emb})
+                    embed_status["readme_emb"] = "proxy"
+                    logger.info("  using proxy README embedding for %s", full_name)
 
-            if not readme_text or not readme_text.strip():
-                raise EmbedError(f"repo {full_name} has no README — cannot embed")
+            if not source_has_desc_emb:
+                proxy_desc = await _find_desc_proxy_embedding(session, source)
+                if proxy_desc:
+                    source = source.model_copy(update={"description_embedding": proxy_desc})
+                    embed_status["desc_emb"] = "proxy"
+                    logger.info("  using proxy description embedding for %s", full_name)
 
-            from reporelay_mvp.purpose import get_effective_description
-            effective_description = get_effective_description(source.description, readme_text)
-            if not effective_description:
-                effective_description = readme_text.strip()[:200].replace("\n", " ")
+            # ── Background: launch real Gemini embed for next visit ───────
+            _bg_owner, _bg_name = owner, name
+            _bg_source_id = source.id
+            _bg_full_name = full_name
+            async def _background_embed() -> None:
+                """Embed description + README in background."""
+                try:
+                    bg_session = await data.get_session()
+                    try:
+                        settings = get_mvp_settings()
+                        async with _auth_client(settings.github_token) as client:
+                            readme_text = await fetch_readme(client, _bg_owner, _bg_name)
+                            meta = await fetch_repo_metadata(client, _bg_owner, _bg_name)
+                        desc_text = meta.get("description", "") or ""
 
-            if effective_description != (source.description or ""):
-                await data.upsert_repo(
-                    session, repo_id=source.id, owner=owner, name=name,
-                    full_name=full_name, description=effective_description,
-                    language=source.language, topics=source.topics,
-                    stars=source.stars, dependencies=source.dependencies,
-                )
-                source = source.model_copy(update={"description": effective_description})
+                        if not readme_text or not readme_text.strip():
+                            return
 
-            logger.info("embedding description + README for %s in parallel", full_name)
-            _t_emb = _time.monotonic()
-            try:
-                desc_emb, readme_emb = await asyncio.wait_for(
-                    asyncio.gather(
-                        embed_text(effective_description),
-                        embed_text(readme_text[:8000]),
-                    ),
-                    timeout=20.0,
-                )
-            except asyncio.TimeoutError:
-                raise EmbedError(f"Gemini embedding timed out for {full_name}") from None
-            except Exception as exc:
-                raise EmbedError(f"Gemini embedding failed for {full_name}: {exc}") from exc
-            logger.info("Gemini embed took %.1fs for %s", _time.monotonic() - _t_emb, full_name)
+                        from reporelay_mvp.purpose import get_effective_description
+                        desc = get_effective_description(desc_text, readme_text) or desc_text or readme_text[:200].replace("\n", " ")
 
-            if not is_real_vector(desc_emb):
-                raise EmbedError(f"description embedding is zero/NaN for {full_name}")
-            if not is_real_vector(readme_emb):
-                raise EmbedError(f"README embedding is zero/NaN for {full_name}")
+                        desc_emb, readme_emb = await asyncio.wait_for(
+                            asyncio.gather(embed_text(desc), embed_text(readme_text[:8000])),
+                            timeout=25.0,
+                        )
+                        if is_real_vector(readme_emb):
+                            await data.set_embedding(bg_session, repo_id=_bg_source_id, embedding=readme_emb)
+                        if is_real_vector(desc_emb):
+                            await data.set_description_embedding(bg_session, repo_id=_bg_source_id, description_embedding=desc_emb)
+                        await bg_session.commit()
+                        logger.info("  background embed complete for %s", _bg_full_name)
+                    finally:
+                        await bg_session.close()
+                except Exception as exc:
+                    logger.warning("  background embed failed for %s: %s", _bg_full_name, exc)
 
-            await data.set_description_embedding(session, repo_id=source.id, description_embedding=desc_emb)
-            await data.set_embedding(session, repo_id=source.id, embedding=readme_emb)
-            source = source.model_copy(update={
-                "description_embedding": desc_emb,
-                "embedding": readme_emb,
-            })
-
-            from reporelay_mvp.features import _tokenize_readme
-            source_readme_tokens = _tokenize_readme(source.full_name, readme_text)
-
-            await session.commit()
-            embed_status = {"desc_emb": "ok", "readme_emb": "ok"}
-            logger.info("embedding complete for %s (desc=%d, readme=%d chars)",
-                        full_name, len(effective_description), len(readme_text[:8000]))
+            asyncio.create_task(_background_embed())
 
         # ── Step 3: Generate candidates ──────────────────────────────────
         _t_cand = _time.monotonic()

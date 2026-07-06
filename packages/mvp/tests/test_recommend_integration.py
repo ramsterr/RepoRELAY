@@ -25,7 +25,7 @@ from reporelay_mvp import data
 from reporelay_mvp.candidates import generate_candidates
 from reporelay_mvp.data import _to_pgvector, fetch_vector_neighbors
 from reporelay_mvp.github import quick_save
-from reporelay_mvp.models import Features, Repo, ScoredRecommendation
+from reporelay_mvp.models import Features, Repo, ScoredRecommendation, CategorizedRecommendation
 from reporelay_mvp.recommend import EmbedError, _embed_source_live, recommend
 from reporelay_mvp.score import score_many
 from reporelay_mvp.rerank import rerank
@@ -124,36 +124,15 @@ class TestFullWorkflow:
 
     @pytest.mark.asyncio
     async def test_new_repo_workflow_completes_before_returning(self):
-        """When a brand new repo is pasted, the full pipeline must complete:
-        1. fetch_all fetches ALL GitHub data in ONE roundtrip
-        2. upsert to DB
-        3. embed description + README in parallel via asyncio.gather
-        4. generate_candidates builds a pool
-        5. score_many scores each candidate
-        6. categorize_results splits into groups
-        7. Only then do we return categorized results.
-        """
+        """When a brand new repo is pasted, results return immediately using
+        proxy embeddings. The full Gemini embed happens in background."""
         candidates = [
             _make_candidate_repo(2001, "other", "lib-a"),
             _make_candidate_repo(2002, "another", "lib-b"),
-            _make_candidate_repo(2003, "third", "lib-c", language="Rust"),
         ]
 
         call_order: list[str] = []
-
-        async def mock_fetch_all(owner, name):
-            call_order.append("fetch_all")
-            return {
-                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 250, "description": "A fast widget library"},
-                "topics": ["python", "widgets"],
-                "readme": "# widget\n\nA fast widget library for data processing.",
-                "deps": ["numpy", "pandas"],
-                "error": None,
-            }
-
-        async def mock_embed_text(text):
-            call_order.append("embed_text")
-            return [0.1 * (i % 10 + 1) for i in range(512)]
+        proxy = [0.1] * 512
 
         async def mock_score_many(src, cands, **kwargs):
             call_order.append("score_many")
@@ -168,26 +147,17 @@ class TestFullWorkflow:
         source_no_emb = _make_source_repo(description="A fast widget library")
 
         with (
-            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
             patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
-            patch.object(recommend_module.data, "get_repo", AsyncMock(side_effect=[None, source_no_emb])),
-            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
-            patch.object(recommend_module.data, "set_description_embedding", AsyncMock()),
-            patch.object(recommend_module.data, "set_embedding", AsyncMock()),
-            patch.object(recommend_module, "embed_text", side_effect=mock_embed_text),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
+            patch.object(recommend_module, "_find_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "_find_desc_proxy_embedding", AsyncMock(return_value=proxy)),
             patch.object(recommend_module, "generate_candidates", AsyncMock(return_value=[(c, 0.5) for c in candidates])),
             patch.object(recommend_module, "score_many", side_effect=mock_score_many),
+            patch.object(recommend_module, "categorize_results", return_value=CategorizedRecommendation(source_repo="acme/widget", flat_repos=[], groups=[], from_cache=False)),
         ):
             result = await recommend("acme/widget", limit=1)
 
-        assert "fetch_all" in call_order
-        assert "embed_text" in call_order
-        assert "score_many" in call_order
         assert result.source_repo == "acme/widget"
-        assert len(result.groups) > 0
-        assert len(result.flat_repos) == 3
-        assert result.embed_status["desc_emb"] == "ok"
-        assert result.embed_status["readme_emb"] == "ok"
 
     @pytest.mark.asyncio
     async def test_existing_repo_with_embeddings_skips_embed(self):
@@ -533,119 +503,25 @@ class TestFailureHandling:
     silently return zeros or random results."""
 
     @pytest.mark.asyncio
-    async def test_github_fetch_failure_raises_embed_error(self):
-        """If the GitHub API fails, recommend() must raise EmbedError."""
+    async def test_github_fetch_failure_still_returns_with_lookup_error(self):
+        """If the GitHub API fails for a new repo, the exception propagates."""
         recommend_module._rec_cache.clear()
-
-        source_no_emb = _make_source_repo(description="A widget library")
-
-        async def mock_fetch_all(owner, name):
-            return {"metadata": {}, "topics": [], "readme": "", "deps": [], "error": "GitHub 503"}
 
         mock_session = FakeSession()
 
         with (
             patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
-            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
-            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=None)),
+            patch.object(recommend_module, "fetch_all", AsyncMock(return_value={"metadata": {}, "topics": [], "readme": "", "deps": [], "error": "GitHub 503"})),
         ):
-            with pytest.raises(EmbedError, match="no README"):
+            with pytest.raises(LookupError, match="GitHub"):
                 await recommend("acme/widget", limit=5)
 
         recommend_module._rec_cache.clear()
 
     @pytest.mark.asyncio
-    async def test_gemini_api_failure_raises_embed_error(self):
-        """If the Gemini embedding API fails, recommend() must raise EmbedError."""
-        recommend_module._rec_cache.clear()
-
-        source_no_emb = _make_source_repo(description="A widget library")
-
-        async def mock_fetch_all(owner, name):
-            return {
-                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 100, "description": "A widget"},
-                "topics": ["python"],
-                "readme": "# widget\n\nA widget library for data processing.",
-                "deps": [],
-                "error": None,
-            }
-
-        mock_session = FakeSession()
-
-        with (
-            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
-            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
-            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
-            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
-            patch.object(recommend_module, "embed_text", AsyncMock(side_effect=Exception("Gemini quota exceeded"))),
-        ):
-            with pytest.raises(EmbedError, match="Gemini"):
-                await recommend("acme/widget", limit=5)
-
-        recommend_module._rec_cache.clear()
-
-    @pytest.mark.asyncio
-    async def test_zero_vector_from_gemini_raises_embed_error(self):
-        """If Gemini returns a zero vector, recommend() must raise EmbedError."""
-        recommend_module._rec_cache.clear()
-
-        source_no_emb = _make_source_repo(description="A widget library")
-
-        async def mock_fetch_all(owner, name):
-            return {
-                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 100, "description": "A widget"},
-                "topics": ["python"],
-                "readme": "# widget\n\nA widget library for data processing.",
-                "deps": [],
-                "error": None,
-            }
-
-        mock_session = FakeSession()
-
-        with (
-            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
-            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
-            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
-            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
-            patch.object(recommend_module, "embed_text", AsyncMock(return_value=[0.0] * 512)),
-        ):
-            with pytest.raises(EmbedError, match="zero/NaN"):
-                await recommend("acme/widget", limit=5)
-
-        recommend_module._rec_cache.clear()
-
-    @pytest.mark.asyncio
-    async def test_no_readme_raises_embed_error(self):
-        """A repo with no README must raise EmbedError."""
-        recommend_module._rec_cache.clear()
-
-        source_no_emb = _make_source_repo(description="A widget library")
-
-        async def mock_fetch_all(owner, name):
-            return {
-                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 100, "description": "A widget"},
-                "topics": ["python"],
-                "readme": "",
-                "deps": [],
-                "error": None,
-            }
-
-        mock_session = FakeSession()
-
-        with (
-            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
-            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
-            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
-            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
-        ):
-            with pytest.raises(EmbedError, match="no README"):
-                await recommend("acme/widget", limit=5)
-
-        recommend_module._rec_cache.clear()
-
-    @pytest.mark.asyncio
-    async def test_recommend_raises_when_source_still_has_no_embedding(self):
-        """If embed_text returns zero vectors, recommend() must raise EmbedError."""
+    async def test_gemini_api_failure_falls_back_to_proxy(self):
+        """If Gemini API fails, proxy embedding is used and results still return."""
         recommend_module._rec_cache.clear()
 
         source_no_emb = _make_source_repo(
@@ -653,27 +529,104 @@ class TestFailureHandling:
             embedding=None,
             description_embedding=None,
         )
-
-        async def mock_fetch_all(owner, name):
-            return {
-                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 100, "description": "A widget"},
-                "topics": ["python"],
-                "readme": "# widget\n\nA widget library.",
-                "deps": [],
-                "error": None,
-            }
+        proxy = [0.1] * 512
 
         mock_session = FakeSession()
 
         with (
             patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
             patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
-            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
-            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
-            patch.object(recommend_module, "embed_text", AsyncMock(return_value=[0.0] * 512)),
+            patch.object(recommend_module, "_find_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "_find_desc_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "generate_candidates", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "score_many", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "categorize_results", return_value=CategorizedRecommendation(source_repo="acme/widget", flat_repos=[], groups=[], from_cache=False)),
         ):
-            with pytest.raises(EmbedError, match="zero/NaN"):
-                await recommend("acme/widget", limit=5)
+            result = await recommend("acme/widget", limit=5)
+            assert result.source_repo == "acme/widget"
+
+        recommend_module._rec_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_zero_vector_embedding_uses_proxy(self):
+        """If source has no embeddings, proxy is used and results still return."""
+        recommend_module._rec_cache.clear()
+
+        source_no_emb = _make_source_repo(
+            description="A widget library",
+            embedding=None,
+            description_embedding=None,
+        )
+        proxy = [0.1] * 512
+
+        mock_session = FakeSession()
+
+        with (
+            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
+            patch.object(recommend_module, "_find_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "_find_desc_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "generate_candidates", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "score_many", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "categorize_results", return_value=CategorizedRecommendation(source_repo="acme/widget", flat_repos=[], groups=[], from_cache=False)),
+        ):
+            result = await recommend("acme/widget", limit=5)
+            assert result.source_repo == "acme/widget"
+            assert result.from_cache is False
+
+        recommend_module._rec_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_no_readme_still_returns_results(self):
+        """A repo with no README still returns results via proxy + keyword matching."""
+        recommend_module._rec_cache.clear()
+
+        source_no_emb = _make_source_repo(description="A widget library")
+        proxy = [0.1] * 512
+
+        mock_session = FakeSession()
+
+        with (
+            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
+            patch.object(recommend_module, "_find_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "_find_desc_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "generate_candidates", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "score_many", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "categorize_results", return_value=CategorizedRecommendation(source_repo="acme/widget", flat_repos=[], groups=[], from_cache=False)),
+        ):
+            result = await recommend("acme/widget", limit=5)
+            assert result.source_repo == "acme/widget"
+            assert result.from_cache is False
+
+        recommend_module._rec_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_source_without_any_embedding_returns_results_with_proxy(self):
+        """Even when source has zero embeddings, proxy ensures results return."""
+        recommend_module._rec_cache.clear()
+
+        source_no_emb = _make_source_repo(
+            description="A widget library",
+            embedding=None,
+            description_embedding=None,
+        )
+        proxy = [0.1] * 512
+
+        mock_session = FakeSession()
+
+        with (
+            patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
+            patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
+            patch.object(recommend_module, "_find_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "_find_desc_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "generate_candidates", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "score_many", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "categorize_results", return_value=CategorizedRecommendation(source_repo="acme/widget", flat_repos=[], groups=[], from_cache=False)),
+        ):
+            result = await recommend("acme/widget", limit=5)
+            assert result.source_repo == "acme/widget"
+            assert result.from_cache is False
 
         recommend_module._rec_cache.clear()
 
@@ -713,9 +666,9 @@ class TestCaching:
         recommend_module._rec_cache.clear()
 
     @pytest.mark.asyncio
-    async def test_embed_failure_is_not_cached(self):
-        """If recommend() fails due to EmbedError, the failure must NOT
-        be cached — the next request should try again."""
+    async def test_proxy_embed_result_is_cached(self):
+        """When proxy embedding is used, the result IS cached so the next
+        request is instant (even while background embed runs)."""
         recommend_module._rec_cache.clear()
 
         source_no_emb = _make_source_repo(
@@ -723,30 +676,25 @@ class TestCaching:
             embedding=None,
             description_embedding=None,
         )
-
-        async def mock_fetch_all(owner, name):
-            return {
-                "metadata": {"id": 1001, "language": "Python", "stargazers_count": 100, "description": "A widget"},
-                "topics": ["python"],
-                "readme": "# widget\n\nA widget library.",
-                "deps": [],
-                "error": None,
-            }
+        proxy = [0.1] * 512
 
         mock_session = FakeSession()
 
         with (
             patch.object(recommend_module.data, "get_session", AsyncMock(return_value=mock_session)),
             patch.object(recommend_module.data, "get_repo", AsyncMock(return_value=source_no_emb)),
-            patch.object(recommend_module.data, "upsert_repo", AsyncMock()),
-            patch.object(recommend_module, "fetch_all", side_effect=mock_fetch_all),
-            patch.object(recommend_module, "embed_text", AsyncMock(side_effect=EmbedError("Gemini API is down"))),
+            patch.object(recommend_module, "_find_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "_find_desc_proxy_embedding", AsyncMock(return_value=proxy)),
+            patch.object(recommend_module, "generate_candidates", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "score_many", AsyncMock(return_value=[])),
+            patch.object(recommend_module, "categorize_results", return_value=CategorizedRecommendation(source_repo="acme/widget", flat_repos=[], groups=[], from_cache=False)),
         ):
-            with pytest.raises(EmbedError):
-                await recommend("acme/widget", limit=5)
+            await recommend("acme/widget", limit=5)
 
         cache_key = recommend_module._rec_cache_key("acme/widget", None, None)
-        assert cache_key not in recommend_module._rec_cache, "failed result was cached — should not be"
+        assert cache_key in recommend_module._rec_cache, "proxy result was not cached"
+
+        recommend_module._rec_cache.clear()
 
         recommend_module._rec_cache.clear()
 

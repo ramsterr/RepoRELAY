@@ -5,26 +5,37 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
 ---
 
 <Base>
-  <h1>find repos worth your time</h1>
-  <p class="subtitle">
-    built with a 5-stage recommender — pure Postgres + pgvector, no ML training
-  </p>
+  <section class="hero">
+    <h1>find repos worth your time</h1>
+    <p class="subtitle">
+      Discover GitHub repositories that actually match your taste. Built with a
+      5-stage recommender using Postgres + pgvector — no ML training, no user data.
+    </p>
 
-  <div class="search-bar">
-    <input
-      type="text"
-      id="repo-input"
-      placeholder="owner/name or paste a GitHub URL"
-      autofocus
-    />
-    <input
-      type="text"
-      id="tags-input"
-      placeholder="tags (optional) — e.g. react, typescript"
-      style="max-width:280px;"
-    />
-    <button type="button" id="search-btn">search</button>
-  </div>
+    <div class="search-bar">
+      <input
+        type="text"
+        id="repo-input"
+        placeholder="owner/name or paste a GitHub URL"
+        autofocus
+      />
+      <input
+        type="text"
+        id="tags-input"
+        placeholder="tags (optional) — e.g. react, typescript"
+        style="max-width: 320px;"
+      />
+      <button type="button" id="search-btn">search</button>
+    </div>
+
+    <div class="example-repos" id="popular-repos">
+      <span style="opacity:0.5">loading suggestions…</span>
+    </div>
+
+    <div class="actions">
+      <a href="/explore" class="btn btn-outline">surprise me</a>
+    </div>
+  </section>
 
   <p class="section-label">
     <span class="trending-icon" aria-hidden="true">▲</span>
@@ -33,20 +44,6 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   </p>
   <div class="trending-grid" id="trending-grid">
     <div class="loading" style="grid-column: 1 / -1;">loading trending…</div>
-  </div>
-
-  <p class="section-label">
-    try something random
-    <button type="button" class="btn btn-outline" id="shuffle-btn" onclick="return window.loadRandomRepos && window.loadRandomRepos()" style="font-size:0.7rem;padding:0.25rem 0.6rem;margin-left:0.5rem;text-transform:lowercase;" aria-label="Shuffle repos">↻ shuffle</button>
-  </p>
-  <div class="example-repos" id="popular-repos">
-    <span style="opacity:0.4">loading…</span>
-  </div>
-
-  <div class="actions" style="margin-top: 2rem;">
-    <a href="/explore" class="btn btn-outline" style="display:inline-block;">
-      surprise me
-    </a>
   </div>
 </Base>
 
@@ -118,10 +115,10 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
   function loadRandomRepos() {
     var el = document.getElementById("popular-repos");
     if (!el) return;
-    el.innerHTML = '<span style="opacity:0.4">loading…</span>';
-    cachedFetchWithRetry(API + "/random?limit=8", {
+    el.innerHTML = '<span style="opacity:0.5">loading…</span>';
+    cachedFetchWithRetry(API + "/random?limit=10", {
       onSlow: function () {
-        el.innerHTML = '<span style="opacity:0.4">still loading…</span>';
+        el.innerHTML = '<span style="opacity:0.5">still loading…</span>';
       },
     })
       .then(function (data) {
@@ -130,13 +127,14 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         for (var i = 0; i < repos.length; i++) {
           html += '<a href="/repo?repo=' + encodeURIComponent(repos[i].full_name) + '">' + repos[i].full_name + '</a>';
         }
+        html += '<button type="button" class="btn btn-outline" id="shuffle-btn" onclick="return window.loadRandomRepos && window.loadRandomRepos()" style="font-size:0.75rem;padding:0.35rem 0.75rem;" aria-label="Shuffle suggestions">↻ shuffle</button>';
         el.innerHTML = html;
       })
       .catch(function (e) {
         var msg = (e && e.message) || "failed to load";
         el.innerHTML =
-          '<span style="color: var(--red); font-size: 0.75rem;">' + msg + '</span>' +
-          ' <button type="button" class="btn btn-outline" style="font-size:0.7rem;padding:0.25rem 0.6rem;margin-left:0.5rem;" onclick="return window.loadRandomRepos && window.loadRandomRepos()">retry</button>';
+          '<span style="color: var(--red); font-size: 0.8rem;">' + msg + '</span>' +
+          ' <button type="button" class="btn btn-outline" style="font-size:0.75rem;padding:0.35rem 0.75rem;" onclick="return window.loadRandomRepos && window.loadRandomRepos()">retry</button>';
       });
   }
 
@@ -192,7 +190,7 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
         var msg = (e && e.message) || "failed to load";
         trendingEl.innerHTML =
           '<div class="error" style="grid-column: 1 / -1;">' + msg +
-          '<br><button type="button" class="btn btn-outline" style="margin-top:0.5rem;font-size:0.75rem;padding:0.3rem 0.7rem;" id="retry-trending">retry</button>' +
+          '<br><button type="button" class="btn btn-outline" style="margin-top:0.5rem;font-size:0.8rem;padding:0.35rem 0.85rem;" id="retry-trending">retry</button>' +
           '</div>';
         var rb = document.getElementById("retry-trending");
         if (rb) rb.addEventListener("click", function () { window.location.reload(); });

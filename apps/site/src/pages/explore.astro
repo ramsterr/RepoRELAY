@@ -163,24 +163,41 @@ const API = import.meta.env.PUBLIC_API_URL || "http://localhost:8001";
     })
       .then(function (data) {
         var total = data.total || totalCountByTopic[topic] || 0;
-        var shown = data.repos.length;
-        var totalPages = Math.ceil(total / pageSize);
+        var totalPages = Math.ceil(total / pageSize) || 1;
 
         var paginationHtml = '';
         if (totalPages > 1) {
-          paginationHtml = '<div class="pagination" style="margin:1rem 0;display:flex;align-items:center;gap:0.35rem;">';
-          for (var p = 0; p < totalPages; p++) {
-            var activeClass = p === page ? 'btn-accent' : 'btn-outline';
-            paginationHtml += '<button class="btn ' + activeClass + '" style="padding:0.3rem 0.7rem;font-size:0.78rem;min-width:2rem;" onclick="loadTopicDetail(\'' + esc(topic) + '\',' + p + ')">' + (p + 1) + '</button>';
-          }
-          paginationHtml += '</div>';
+          paginationHtml =
+            '<div class="pagination" style="margin:1rem 0;display:flex;align-items:center;justify-content:center;gap:0.5rem;flex-wrap:wrap;">' +
+            (page > 0
+              ? '<a href="#" class="btn btn-outline" style="padding:0.35rem 0.8rem;font-size:0.78rem;text-decoration:none;" id="pagination-prev">← prev</a>'
+              : '<span class="btn btn-outline disabled" style="padding:0.35rem 0.8rem;font-size:0.78rem;opacity:0.4;cursor:default;">← prev</span>') +
+            '<span style="font-size:0.82rem;opacity:0.8;">page <input type="number" id="pagination-input" value="' + (page + 1) + '" min="1" max="' + totalPages + '" ' +
+            'style="width:3rem;padding:0.25rem 0.3rem;text-align:center;background:var(--bg-glass);border:1px solid var(--border);border-radius:4px;color:inherit;font:inherit;font-size:0.8rem;" />' +
+            ' of ' + totalPages + '</span>' +
+            (page < totalPages - 1
+              ? '<a href="#" class="btn btn-outline" style="padding:0.35rem 0.8rem;font-size:0.78rem;text-decoration:none;" id="pagination-next">next →</a>'
+              : '<span class="btn btn-outline disabled" style="padding:0.35rem 0.8rem;font-size:0.78rem;opacity:0.4;cursor:default;">next →</span>') +
+            '</div>';
         }
 
         var titleHtml =
           '<p class="section-label" style="margin-top: 1.5rem;">' +
-          'page ' + (page + 1) + ' of ' + totalPages + ' · ' + fmt(total) + ' <strong>' + esc(topic) + '</strong> repos' +
+          fmt(total) + ' <strong>' + esc(topic) + '</strong> repos' +
           '</p>';
-        detail.innerHTML = titleHtml + paginationHtml + renderRepos(data.repos) + paginationHtml;
+        detail.innerHTML = titleHtml + renderRepos(data.repos) + paginationHtml;
+
+        // Bind pagination events (avoids inline onclick with escaped strings)
+        var prevBtn = document.getElementById("pagination-prev");
+        if (prevBtn) prevBtn.addEventListener("click", function (e) { e.preventDefault(); loadTopicDetail(topic, page - 1); });
+        var nextBtn = document.getElementById("pagination-next");
+        if (nextBtn) nextBtn.addEventListener("click", function (e) { e.preventDefault(); loadTopicDetail(topic, page + 1); });
+        var pageInput = document.getElementById("pagination-input");
+        if (pageInput) pageInput.addEventListener("change", function () {
+          var v = parseInt(this.value);
+          if (v >= 1 && v <= totalPages) loadTopicDetail(topic, v - 1);
+          else this.value = page + 1;
+        });
       })
       .catch(function (e) {
         var msg = (e && e.message) || "failed to load";

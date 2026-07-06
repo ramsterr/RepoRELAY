@@ -87,8 +87,8 @@ import "../styles/global.css";
           { name: "stars",     icon: "⋆" },
           { name: "peaks",     icon: "⩘" },
           { name: "gems",      icon: "◇" },
-          { name: "heart",     icon: "♥" },
-          { name: "ripples",   icon: "⊙" },
+          { name: "pixel",     icon: "◈" },
+          { name: "circuit",   icon: "⌬" },
           { name: "forest",    icon: "⫾" },
           { name: "matrix",    icon: "⏐" },
           { name: "comb",      icon: "⬢" },
@@ -164,29 +164,54 @@ import "../styles/global.css";
             }
           },
           function (c, r, cols, rows) {
-            var cx = cols / 2, cy = rows / 2 - rows * 0.06;
-            var s = Math.min(cols, rows) * 0.28;
-            var noise = makeNoise(r);
+            // pixel: retro 8-bit landscape with mountains, stars, moon
+            var cx = Math.floor(cols / 2), cy = Math.floor(rows / 2);
+            var groundY = Math.floor(rows * 0.65);
+            var moonCx = Math.floor(cols * 0.72), moonCy = Math.floor(rows * 0.18), moonR = Math.floor(Math.min(cols, rows) * 0.07);
             for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-              var nx = (x - cx) / s, ny = -(y - cy) / s;
-              var inside = Math.pow(nx * nx + ny * ny - 1, 3) - nx * nx * ny * ny * ny <= 0.02;
-              var bg = noise(x * 0.08, y * 0.08) * 0.12;
-              this.push(clamp(inside ? 0.8 : bg, 0, 1));
+              var v = 0.08;
+              // Sky gradient
+              if (y < groundY) {
+                var skyFrac = y / groundY;
+                v = 0.03 + skyFrac * 0.25;
+                // Stars (sparse, twinkling)
+                var starSeed = (x * 37 + y * 13) % 997;
+                if (starSeed < 15 && y < groundY * 0.6) v = 0.8;
+                // Moon
+                var mdx = Math.abs(x - moonCx), mdy = Math.abs(y - moonCy);
+                if (Math.sqrt(mdx*mdx + mdy*mdy) < moonR) v = 0.9;
+              } else {
+                // Ground: pixel mountains
+                var mx = x % 6, my = y - groundY;
+                var mountainHeight = Math.floor(12 + (Math.sin(x * 0.12) * 0.5 + 0.5) * 18);
+                if (my < mountainHeight) {
+                  v = 0.45 + (my / mountainHeight) * 0.25;
+                } else {
+                  v = 0.3 + (Math.floor((x + y) / 3) % 2) * 0.08;
+                }
+              }
+              this.push(clamp(v, 0, 1));
             }
           },
           function (c, r, cols, rows) {
-            var minDim = Math.min(cols, rows);
-            var cx = cols * (0.3 + r() * 0.4);
-            var cy = rows * (0.3 + r() * 0.4);
+            // circuit: electronic PCB traces with glowing nodes
+            var noise = makeNoise(r);
             for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
-              var dx = (x - cx) / minDim, dy = (y - cy) / minDim;
-              var dist = Math.sqrt(dx * dx + dy * dy);
-              var w1 = Math.sin(dist * 8) * 0.5 + 0.5;
-              var w2 = Math.sin(dist * 4 + 1.5) * 0.3;
-              var w3 = Math.sin(dist * 2 + 3) * 0.2;
-              var wave = (w1 + w2 + w3) / 1.5;
-              var fade = 1 - Math.min(1, dist * 1.5);
-              this.push(clamp(wave * fade, 0, 1));
+              var v = 0.04;
+              var nx = x / cols, ny = y / rows;
+              // Horizontal and vertical trace lines
+              var hTrace = (ny * cols) % 1 < 0.015 ? 0.7 : 0;
+              var vTrace = (nx * rows) % 1 < 0.015 ? 0.7 : 0;
+              // Diagonal traces
+              var dTrace = Math.abs(Math.sin(nx * 12 + ny * 8)) < 0.08 ? 0.5 : 0;
+              // Glowing nodes at intersections
+              var nodeX = Math.floor(x / (cols / 14)), nodeY = Math.floor(y / (rows / 10));
+              var nodeDist = Math.sqrt(Math.pow(x - (nodeX + 0.5) * cols / 14, 2) + Math.pow(y - (nodeY + 0.5) * rows / 10, 2));
+              var node = nodeDist < 5 ? 0.9 : 0;
+              v = Math.max(hTrace, vTrace, dTrace, node);
+              // Subtle grid base
+              v = Math.max(v, ((Math.floor(x / 8) + Math.floor(y / 8)) % 2) * 0.04);
+              this.push(clamp(v, 0, 1));
             }
           },
           function (c, r, cols, rows) {

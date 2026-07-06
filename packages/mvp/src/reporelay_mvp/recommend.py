@@ -476,7 +476,23 @@ def categorize_results(
     limit: int,
     seed: int | None,
 ) -> CategorizedRecommendation:
-    """Split scored candidates into labeled groups by primary signal."""
+    """Split scored candidates into labeled groups by primary signal.
+
+    Groups are ordered by relevance:
+      1. Score Matched — highest overall semantic match (always first)
+      2. Topic-specific categories — one per source topic (dynamic)
+      3. Cross-Discovery — different language, still related
+      4. More Recommendations — everything else
+
+    For a source repo with topics ['self-hosted', 'game', 'ai'],
+    the groups would be:
+      - Score Matched
+      - self-hosted repos
+      - game repos
+      - ai repos
+      - Cross-Discovery
+      - More Recommendations
+    """
     source_lang = source.language.lower() if source.language else None
     source_owner = source.owner.lower()
 
@@ -501,51 +517,50 @@ def categorize_results(
     used_ids: set[int] = set()
     groups: list[RecommendationGroup] = []
 
-    # Group 1: Semantic Matches — highest readme_vs_desc_cosine_sim
-    semantic = sorted(deduped, key=lambda x: x[2].readme_vs_desc_cosine_sim, reverse=True)
-    semantic = [r for r in semantic if r[2].readme_vs_desc_cosine_sim > 0.3]
-    if semantic:
-        g = _make_group(semantic, "Semantic Matches",
-                       "readme-description embedding similarity", used_ids, 6)
-        if g:
-            groups.append(g)
-
-    # Group 2: Language-Based — same language
-    if source_lang:
-        lang = [r for r in deduped if r[2].language_match >= 1.0]
-        g = _make_group(lang, f"Language-Based ({source.language})",
-                       "same primary language", used_ids, 4)
-        if g:
-            groups.append(g)
-
-    # Group 3: Topic-Aligned — high topic overlap
-    topic = [r for r in deduped if r[2].topic_overlap > 0.2]
-    g = _make_group(topic, "Topic-Aligned", "shared topic overlap",
-                   used_ids, 4)
+    # ── Group 1: Score Matched (highest overall scores) — ALWAYS FIRST ──
+    top_scored = sorted(deduped, key=lambda x: x[1], reverse=True)
+    g = _make_group(top_scored, "Score Matched", "highest semantic match", used_ids, 5)
     if g:
         groups.append(g)
 
-    # Group 4: Cross-Discovery — different language, still related
+    # ── Group 2: Dynamic categories from source topics ────────────────
+    # Filter out the source language from topics (it's not a real topic)
+    src_lang_lower = (source.language or "").lower()
+    meaningful_topics = [
+        t for t in source.topics
+        if t.lower() not in (src_lang_lower, "") and len(t) > 1
+    ]
+    # Take up to 4 most specific topics (longer topics are more specific)
+    meaningful_topics.sort(key=lambda t: -len(t))
+    meaningful_topics = meaningful_topics[:4]
+
+    for topic in meaningful_topics:
+        topic_lower = topic.lower()
+        topic_matches = [
+            r for r in deduped
+            if r[0].id not in used_ids
+            and any(t.lower() == topic_lower for t in r[0].topics)
+        ]
+        if topic_matches:
+            g = _make_group(topic_matches, topic.title(), f"{topic} repos", used_ids, 4)
+            if g:
+                groups.append(g)
+
+    # ── Group 3: Cross-Discovery — different language, still related ──
     if source_lang:
         cross = [r for r in deduped
-                 if r[0].language and r[0].language.lower() != source_lang
-                 and (r[2].topic_overlap > 0.1 or r[2].readme_vs_desc_cosine_sim > 0.2)]
+                 if r[0].id not in used_ids
+                 and r[0].language and r[0].language.lower() != source_lang
+                 and (r[2].topic_overlap > 0.05 or r[2].readme_vs_desc_cosine_sim > 0.15)]
         g = _make_group(cross, "Cross-Discovery",
                        "different language, related topic", used_ids, 4)
         if g:
             groups.append(g)
 
-    # Group 5: Scale-Matched — similar popularity tier
-    scale = sorted(deduped, key=lambda x: x[2].star_ratio, reverse=True)
-    g = _make_group(scale, "Scale-Matched", "similar popularity tier",
-                   used_ids, 4)
-    if g:
-        groups.append(g)
-
-    # Fallback: remaining scored repos
+    # ── Group 4: More Recommendations (remaining) ─────────────────────
     remaining = [r for r in deduped if r[0].id not in used_ids]
     if remaining:
-        g = _make_group(remaining, "More Recommendations", "scored match",
+        g = _make_group(remaining, "More Recommendations", "similar repos",
                        used_ids, min(8, len(remaining)))
         if g:
             groups.append(g)

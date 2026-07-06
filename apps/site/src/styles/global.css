@@ -244,19 +244,6 @@ nav .logo {
   transition: color 0.2s ease;
 }
 
-.logo-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  border-radius: var(--radius-xs);
-  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
-  color: #fff;
-  font-size: 1rem;
-  box-shadow: var(--glow-sm);
-}
-
 .logo-text {
   position: relative;
 }

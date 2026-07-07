@@ -109,7 +109,32 @@ def _configure_gemini() -> None:
         import google.generativeai as genai
 
         genai.configure(api_key=api_key)  # type: ignore[attr-defined]
+
+        _patch_string_utils()
+
         _gemini_configured = True
+
+
+def _patch_string_utils() -> None:
+    """Patch a bug in google-generativeai v0.8.6 (deprecated SDK).
+
+    `strip_oneof(docstring)` calls `docstring.splitlines()` without
+    checking for None. When protobuf fields lack docstrings, this
+    crashes with: 'NoneType' object has no attribute 'splitlines'.
+    """
+    try:
+        import google.generativeai.string_utils as su
+
+        _original_strip_oneof = su.strip_oneof
+
+        def _patched_strip_oneof(docstring):
+            if docstring is None:
+                return ""
+            return _original_strip_oneof(docstring)
+
+        su.strip_oneof = _patched_strip_oneof  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 def _load_model() -> Any:

@@ -26,6 +26,7 @@ uv run --package reporelay-mvp reporelay-mvp <command> [options]
   - [`seed-topics`](#seed-topics) — bulk-index the corpus by topic
   - [`embed`](#embed) — compute embeddings for un-embedded repos
   - [`infer-topics`](#infer-topics) — backfill inferred topics from READMEs
+  - [`extract-keywords`](#extract-keywords) — extract domain keywords from descriptions
   - [`trending`](#trending) — scrape github.com/trending
   - [`register-webhooks`](#register-webhooks) — register GitHub push webhooks
 - [Common workflows](#common-workflows)
@@ -77,7 +78,7 @@ just mvp save django/django
 **What it does:**
 1. Fetches metadata + topics + README from the GitHub API
 2. Infers additional topics from the README if the repo has <3 topics
-3. Computes a 384-dim embedding of the README
+3. Computes a 512-dim embedding of the README (Gemini) or 384-dim (local BAAI/bge-small)
 4. Upserts everything into `mvp_repos`
 
 ---
@@ -243,9 +244,10 @@ just seed-and-embed "" 130 7000
 
 ### `embed`
 
-Compute and store README embeddings for repos that were indexed from
-search but not yet embedded. Embeddings unlock the pgvector ANN search
-that powers semantic recommendations.
+Compute and store description + README embeddings for repos that were
+indexed from search but not yet embedded. Uses Gemini API in production
+(512-dim vectors, zero local RAM) or local BAAI/bge-small (384-dim).
+Embeddings unlock the pgvector ANN search that powers semantic recommendations.
 
 ```bash
 just mvp embed --limit 1000
@@ -254,7 +256,8 @@ just mvp embed --limit 1000
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `--limit` | int | 1000 | How many top-by-stars repos to embed |
-| `--concurrency` | int | 4 | Parallel README fetches |
+| `--concurrency` | int | 4 | Parallel README fetches (local mode only) |
+| `--batch-size` | int | 50 | Repos per Gemini API call (Gemini mode only) |
 
 **Examples:**
 ```bash
@@ -264,14 +267,17 @@ just mvp embed
 # Embed more repos
 just mvp embed --limit 5000
 
-# Higher concurrency (faster, but more API calls)
+# Higher concurrency (local mode — faster, but more API calls)
 just mvp embed --limit 1000 --concurrency 8
 ```
 
 **Notes:**
-- First run downloads the embedding model (~80MB, ~11s)
-- Each repo = 1 README fetch + 1 embed call
-- Paced to stay under the 5,000 req/hr GitHub REST limit
+- Local mode: first run downloads the embedding model (~80MB, ~11s)
+- Gemini mode: no local model — just API calls (needs `GEMINI_API_KEY`)
+- Each repo = 1 description embed call (94% of corpus) + optional README fetch
+- Description embedding is the primary signal; README embedding only for source repos
+- Batch size: 50 per Gemini API call
+- Paced to stay under the 5,000 req/hr GitHub REST limit (dual tokens = 10,000 req/hr)
 - Run after `seed` and `seed-topics` to backfill embeddings
 
 ---
@@ -325,6 +331,45 @@ done — 312/847 repos got new topics
 - With `--refetch`: the full README is re-fetched from GitHub for higher accuracy
 - Capped at 15 inferred topics per repo
 - Precision-first: avoids hallucinated topics on generic text
+
+---
+
+### `extract-keywords`
+
+Extract domain-specific technical keywords from repo descriptions
+and READMEs. Keywords are stored in a TEXT[] column for fast GIN ARRAY
+overlap queries. Powers the `keyword_match` and `keyword_topic_match`
+scoring features.
+
+```bash
+just mvp extract-keywords --limit 5000
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--limit` | int | 5000 | Max repos to process |
+| `--min-chars` | int | 50 | Only extract keywords from repos with descriptions >= this length |
+| `--from-github` | flag | false | Also download README from GitHub for richer keyword extraction (uses API rate limit) |
+| `--since` | string | none | Process repos updated after this timestamp (ISO 8601) |
+
+**Examples:**
+```bash
+# Default — extract keywords from top 5000 repos by stars
+just mvp extract-keywords
+
+# Process 10000 repos with richer README-based extraction
+just mvp extract-keywords --limit 10000 --from-github
+
+# Only repos with substantive descriptions
+just mvp extract-keywords --min-chars 100
+```
+
+**Notes:**
+- Extracts up to 30 keywords per repo
+- Filters out stopwords, single letters, numbers, and generic terms
+- Prioritizes multi-word terms, hyphenated compounds, CamelCase tokens
+- Without `--from-github`: uses stored description only (fast, no API calls)
+- With `--from-github`: re-fetches README from GitHub for richer extraction
 
 ---
 

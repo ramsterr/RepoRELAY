@@ -1,5 +1,7 @@
 # RepoRelay
-<img width="1518" height="404" alt="image" src="https://github.com/user-attachments/assets/ca415b7d-b563-4229-beb1-b7e8eb874600" />
+
+<img width="1944" height="624" alt="image" src="https://github.com/user-attachments/assets/a63c73fb-8453-4eb6-be4b-963f52296d65" />
+
 
 
 
@@ -10,7 +12,8 @@ No ML training. No user data. Postgres + pgvector + a pre-trained sentence-trans
 
 # visit the site 
 
-<img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/c397f2b9-9c4f-4bf2-a14f-47091c0bd70f" />
+<img width="2858" height="1800" alt="image" src="https://github.com/user-attachments/assets/7df50eac-2147-44f4-a584-beea8938173c" />
+
 
 
 ```
@@ -29,7 +32,8 @@ Live: **[reporelay-site.vercel.app](https://repo-relay-olv2-71av5mdje-rams-proje
 
 
 - **Trending signal** — scrapes [github.com/trending](https://github.com/trending) daily to surface viral repos
-  <img width="2130" height="784" alt="image" src="https://github.com/user-attachments/assets/b504f577-5cda-4ee4-aa6f-df382efb7110" />
+<img width="2188" height="1526" alt="image" src="https://github.com/user-attachments/assets/8318ec07-d66b-4da0-a7b6-25fc6fc6fb0c" />
+
 
 
 - **Web UI** — Astro 5 + vanilla JS, dark/light theme, glass cards over a generative commit-graph art backdrop
@@ -37,7 +41,16 @@ Live: **[reporelay-site.vercel.app](https://repo-relay-olv2-71av5mdje-rams-proje
 
 
   
-- **explore topics**
+# explore topics
+<img width="2180" height="1686" alt="image" src="https://github.com/user-attachments/assets/e3d66a67-9306-49d7-8da9-f8a177278498" />
+explore over 70+ topics
+
+# random picks
+ <img width="2312" height="962" alt="image" src="https://github.com/user-attachments/assets/eae8cbc9-8019-4286-a55c-37d155e5b630" />
+ 
+ <img width="1950" height="404" alt="image" src="https://github.com/user-attachments/assets/e9c5af66-574b-4b48-a469-9de8d2708eb5" />
+
+
   
 **[→ Architecture & data flow](ARCHITECTURE.md)** · **[→ Deploy notes](DEPLOY.md)**
 
@@ -205,8 +218,29 @@ GitHub API ──► Postgres + pgvector ──► Candidates ──► Features
 └── justfile                  # task runner
 ```
 
-# dark theme 
-<img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/d5113a97-159a-467f-8273-18dabbdab74b" />
+# matrix
+<img width="2858" height="1800" alt="image" src="https://github.com/user-attachments/assets/3d4ebccb-db42-4f18-b1d2-6363ab25338a" />
+
+
+# coral
+
+<img width="2848" height="1800" alt="image" src="https://github.com/user-attachments/assets/b49d0abe-07de-471b-9289-f77b7526e944" />
+
+# desert
+
+<img width="2854" height="1800" alt="image" src="https://github.com/user-attachments/assets/b03e9f51-6482-4c74-a6d2-3ebadd9b13b7" />
+
+# waves 
+
+<img width="2856" height="1796" alt="image" src="https://github.com/user-attachments/assets/2a0daf97-615a-46a6-855c-4aef97d0b782" />
+
+# gems
+
+<img width="2854" height="1800" alt="image" src="https://github.com/user-attachments/assets/10b8ada5-51dd-4947-b9a1-c879df2de976" />
+
+# sakura 
+
+<img width="2854" height="1796" alt="image" src="https://github.com/user-attachments/assets/cf481a28-6c04-4cf7-8459-3cf4a6b6fa23" />
 
 
 

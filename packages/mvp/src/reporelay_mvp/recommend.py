@@ -434,6 +434,15 @@ async def recommend(
             #     find repos with description embeddings matching those concepts
 
             # 1. Fetch README to extract keywords
+            _generic_repo_names = frozenset({
+                "ossu", "awesome", "list", "collection", "repo", "course", "courses",
+                "curriculum", "guide", "project", "tool", "library", "framework", "app", "api",
+                "data", "code", "src", "main", "test", "docs", "master", "dev", "prod",
+                "v1", "v2", "v3", "go", "py", "js", "ts", "rs", "rb", "cpp", "cc",
+                "example", "demo", "sample", "tutorial", "learn", "learning",
+                "starter", "template", "boilerplate", "scaffold", "cookiecutter",
+                "dotfiles", "config", "setup", "install", "build", "deploy",
+            })
             try:
                 settings = get_mvp_settings()
                 async with _auth_client_active() as client:
@@ -462,21 +471,12 @@ async def recommend(
                     query_parts.append(desc_text.strip())
 
                 # Priority 2: Repo name tokens (differentiating signal)
-                # Only include tokens that look like real technical/domain terms.
-                # Skip: owner names, ≤3 chars, common non-descriptive repo names.
-                name_tokens = name.lower().replace("-", " ").replace("_", " ").replace(".", " ").split()
-                _generic_repo_names = {
-                    "ossu", "awesome", "list", "collection", "repo", "course", "courses",
-                    "curriculum", "guide", "project", "tool", "library", "framework", "app", "api",
-                    "data", "code", "src", "main", "test", "docs", "master", "dev", "prod",
-                    "v1", "v2", "v3", "go", "py", "js", "ts", "rs", "rb", "cpp", "cc",
-                    "example", "demo", "sample", "tutorial", "learn", "learning",
-                    "starter", "template", "boilerplate", "scaffold", "cookiecutter",
-                    "dotfiles", "config", "setup", "install", "build", "deploy",
-                }
-                name_tokens = [t for t in name_tokens if t not in _generic_repo_names and len(t) >= 4]
+                # Include composite name: "ai-job-search" → "ai job search"
+                name_compounded = name.lower().replace("-", " ").replace("_", " ").replace(".", " ")
+                name_tokens = name_compounded.split()
+                name_tokens = [t for t in name_tokens if t not in _generic_repo_names and len(t) >= 2]
                 if name_tokens:
-                    query_parts.append(" ".join(name_tokens[:5]))
+                    query_parts.append(" ".join(name_tokens[:8]))
 
                 # Priority 3: Top distinctive keywords
                 if keywords:
@@ -506,22 +506,57 @@ async def recommend(
             except Exception as exc:
                 logger.info("  using description fallback for %s (GitHub may be rate-limited)", full_name)
 
-                # When GitHub is rate-limited, use source.description directly.
-                # This is NOT a fallback — it's a perfectly valid path. The
-                # description is the most purpose-dense text available.
+                # When GitHub is rate-limited, build a keyword-rich query from
+                # the source's description + repo name. Embedding the raw
+                # description over-weights incidental text (e.g. "Claude Code")
+                # and misses the domain signal. Extracting keywords first and
+                # embedding those gives a cleaner semantic vector.
                 desc_text = source.description or ""
                 if desc_text and desc_text.strip():
                     try:
-                        query_emb = await embed_text(desc_text.strip())
-                        if is_real_vector(query_emb):
-                            source = source.model_copy(update={
-                                "embedding": query_emb,
-                                "description_embedding": query_emb,
-                            })
-                            embed_status = {"desc_emb": "desc-only", "readme_emb": "desc-only"}
-                            logger.info("  description-only embedding for %s (GitHub rate-limited)", full_name)
-                    except Exception as exc2:
-                        logger.warning("  description embed also failed for %s: %s", full_name, exc2)
+                        from reporelay_mvp.keyword_extractor import extract_keywords
+                        keywords = extract_keywords(desc_text)
+                    except Exception:
+                        keywords = []
+
+                    # Build query from: name tokens + keywords (skip raw description)
+                    name_compounded = name.lower().replace("-", " ").replace("_", " ").replace(".", " ")
+                    name_parts = [t for t in name_compounded.split()
+                                  if t not in _generic_repo_names and len(t) >= 2]
+
+                    query_parts = []
+                    if name_parts:
+                        query_parts.append(" ".join(name_parts[:8]))
+                    if keywords:
+                        query_parts.append(" ".join(keywords[:12]))
+
+                    query_text = " ".join(query_parts)
+                    if query_text:
+                        try:
+                            query_emb = await embed_text(query_text)
+                            if is_real_vector(query_emb):
+                                source = source.model_copy(update={
+                                    "embedding": query_emb,
+                                    "description_embedding": query_emb,
+                                    "keywords": keywords,
+                                })
+                                embed_status = {"desc_emb": "desc-only", "readme_emb": "desc-only"}
+                                logger.info("  description-only embedding for %s (GitHub rate-limited)", full_name)
+                        except Exception as exc2:
+                            logger.warning("  description embed also failed for %s: %s", full_name, exc2)
+                    elif desc_text and desc_text.strip():
+                        # Last resort: no keywords extracted, embed raw description
+                        try:
+                            query_emb = await embed_text(desc_text.strip())
+                            if is_real_vector(query_emb):
+                                source = source.model_copy(update={
+                                    "embedding": query_emb,
+                                    "description_embedding": query_emb,
+                                })
+                                embed_status = {"desc_emb": "desc-only", "readme_emb": "desc-only"}
+                                logger.info("  description-only embedding for %s (GitHub rate-limited)", full_name)
+                        except Exception as exc2:
+                            logger.warning("  description embed also failed for %s: %s", full_name, exc2)
 
             # ── Fallback to proxy if keyword extraction failed ──────────
             if not is_real_vector(source.description_embedding) and not is_real_vector(source.embedding):

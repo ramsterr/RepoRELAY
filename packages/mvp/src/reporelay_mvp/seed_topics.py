@@ -7,12 +7,17 @@ etc. — so the corpus represents the actual software ecosystem.
 Each topic gets `per_topic` repos from a GitHub search sorted by
 stars, then upserted into the DB. The next step after seeding is
 `just mvp embed --limit N` to backfill README embeddings.
+
+Supports two modes:
+  - Uniform (default): same `per_topic` count for every topic
+  - Weighted: per-topic counts from topics_config.py (sums to 50k)
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from reporelay_mvp import data
@@ -225,4 +230,109 @@ async def seed_topics(
             await asyncio.sleep(delay_s)
 
     logger.info("seed-topics complete: %d repos across %d topics", total_upserted, len(topics))
+    return total_upserted
+
+
+async def seed_topics_weighted(
+    *,
+    topics: list[tuple[int, str]] | None = None,
+    category: str | None = None,
+    min_stars: int = 20,
+    delay_s: float = 3.0,
+    total_limit: int = 0,
+) -> int:
+    """Seed repos using per-topic counts (weighted distribution).
+
+    Each topic has its own `count` value — popular topics get more
+    repos, niche topics get fewer. This distributes 50k repos across
+    ~500+ topics.
+
+    Args:
+        topics: List of (count, topic_name) tuples. If None, uses
+                WEIGHTED_TOPICS from topics_config.
+        category: If set, only seed topics from this category.
+        min_stars: Minimum stars for GitHub search.
+        delay_s: Seconds between topic searches (2.0 = 30 req/min).
+        total_limit: Cap total repos seeded (0 = no limit). Safety valve.
+    """
+    if topics is None:
+        from reporelay_mvp.topics_config import WEIGHTED_TOPICS, get_topics_for_category
+
+        if category:
+            topics = get_topics_for_category(category)
+            logger.info("seeding category %r: %d topics", category, len(topics))
+        else:
+            topics = list(WEIGHTED_TOPICS)
+
+    settings = get_mvp_settings()
+    total_upserted = 0
+    total_config = sum(count for count, _ in topics)
+
+    start_time = time.monotonic()
+    processed = 0
+
+    async with _auth_client(settings.github_token) as client:
+        for per_topic_count, topic in topics:
+            if total_limit > 0 and total_upserted >= total_limit:
+                logger.info("total_limit=%d reached, stopping", total_limit)
+                break
+
+            processed += 1
+            topic_upserted = 0
+            pages = max(1, (per_topic_count + 99) // 100)
+            tries = 0
+
+            while tries < 3:
+                tries += 1
+                try:
+                    for page in range(1, pages + 1):
+                        payload = await search_repositories(
+                            client,
+                            topics=[topic],
+                            min_stars=min_stars,
+                            sort="stars",
+                            per_page=100,
+                            page=page,
+                        )
+                        items: list[dict[str, Any]] = payload.get("items", [])
+                        if not items:
+                            break
+
+                        session = await data.get_session()
+                        try:
+                            written = await data.bulk_upsert_from_search(session, items)
+                            await session.commit()
+                            topic_upserted += written
+                        finally:
+                            await session.close()
+
+                        if len(items) < 100:
+                            break
+
+                    break  # success — exit retry loop
+                except Exception as exc:
+                    logger.warning("topic %r attempt %d/3 failed: %s", topic, tries, exc)
+                    if tries < 3:
+                        await asyncio.sleep(12)
+                    else:
+                        logger.warning("topic %r gave up after 3 attempts", topic)
+
+            total_upserted += topic_upserted
+            elapsed = time.monotonic() - start_time
+            pct = (processed / len(topics)) * 100 if topics else 0
+
+            # Progress log every topic
+            logger.info(
+                "  [%d/%d %.1f%%] %r: %d upserted (target=%d) | total=%d | elapsed=%.0fs",
+                processed, len(topics), pct, topic, topic_upserted, per_topic_count,
+                total_upserted, elapsed,
+            )
+
+            await asyncio.sleep(delay_s)
+
+    elapsed = time.monotonic() - start_time
+    logger.info(
+        "seed-topics-weighted complete: %d repos across %d topics (config=%d) in %.0fs",
+        total_upserted, processed, total_config, elapsed,
+    )
     return total_upserted

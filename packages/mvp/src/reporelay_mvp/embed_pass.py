@@ -93,7 +93,7 @@ async def _embed_batch_gemini(texts: list[str], task_type: str) -> list[list[flo
     key optimization that turns 22k individual calls into ~220 batched
     calls (100x reduction).
 
-    For gemini-embedding-001 with output_dimensionality=512.
+    For text-embedding-004 with output_dimensionality=512.
     Retries on 429 rate limits with short exponential backoff.
     Paces requests to stay under 80 RPM.
     """
@@ -103,7 +103,7 @@ async def _embed_batch_gemini(texts: list[str], task_type: str) -> list[list[flo
     def _call() -> list[list[float]]:
         _pace_gemini_call()  # blocks until a slot is available
         result = genai.embed_content(  # type: ignore[attr-defined]
-            model="models/gemini-embedding-001",
+            model="models/text-embedding-004",
             content=texts,
             task_type=task_type,
             output_dimensionality=512,

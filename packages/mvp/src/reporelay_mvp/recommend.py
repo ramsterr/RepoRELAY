@@ -34,7 +34,7 @@ from reporelay_mvp.candidates import generate_candidates, NEUTRAL_SIM
 from reporelay_mvp.embedding import embed_text
 from reporelay_mvp.features import compute_features
 from reporelay_mvp.github import (
-    _auth_client,
+    _auth_client_active,
     fetch_all,
     fetch_dependencies,
     fetch_readme,
@@ -436,7 +436,7 @@ async def recommend(
             # 1. Fetch README to extract keywords
             try:
                 settings = get_mvp_settings()
-                async with _auth_client(settings.github_token) as client:
+                async with _auth_client_active() as client:
                     readme_text = await fetch_readme(client, owner, name)
                     meta = await fetch_repo_metadata(client, owner, name)
                 desc_text = meta.get("description", "") or source.description or ""
@@ -547,7 +547,7 @@ async def recommend(
                     bg_session = await data.get_session()
                     try:
                         settings = get_mvp_settings()
-                        async with _auth_client(settings.github_token) as client:
+                        async with _auth_client_active() as client:
                             readme_text = await fetch_readme(client, _bg_owner, _bg_name)
                             meta = await fetch_repo_metadata(client, _bg_owner, _bg_name)
                         desc_text = meta.get("description", "") or ""
@@ -762,7 +762,7 @@ async def _embed_description_fast(
 
     # 1. Fetch README + dependencies from GitHub
     try:
-        async with _auth_client(settings.github_token) as client:
+        async with _auth_client_active() as client:
             readme_text, deps = await asyncio.wait_for(
                 asyncio.gather(
                     fetch_readme(client, owner, name),
@@ -915,7 +915,7 @@ async def _embed_source_live(
 
     # 1. Fetch README + dependencies from GitHub
     try:
-        async with _auth_client(settings.github_token) as client:
+        async with _auth_client_active() as client:
             readme_text, deps = await asyncio.wait_for(
                 asyncio.gather(
                     fetch_readme(client, owner, name),
@@ -1115,7 +1115,7 @@ async def _expand_pool(
             if rng.random() < 0.25:
                 search_language = None
 
-        async with _auth_client(settings.github_token) as client:
+        async with _auth_client_active() as client:
             payload = await _cached_search(
                 client,
                 topics=topics_for_search,

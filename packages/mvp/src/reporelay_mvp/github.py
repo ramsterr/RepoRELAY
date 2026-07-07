@@ -59,6 +59,11 @@ def _auth_client(token: str) -> httpx.AsyncClient:
     )
 
 
+def _auth_client_active() -> httpx.AsyncClient:
+    """Build a client using the currently active token (respects rotation)."""
+    return _auth_client(_get_active_token())
+
+
 # ── Token rotation: use GITHUB_TOKEN_2 as fallback when primary is rate-limited ──
 _active_github_token_index = 0
 
@@ -115,15 +120,18 @@ async def fetch_readme(client: httpx.AsyncClient, owner: str, name: str) -> str:
         if exc.response.status_code == 404:
             return ""
         if exc.response.status_code in (403, 429):
-            # Rate limited. Check headers for wait time.
+            # Rate limited. Rotate token and sleep.
             await _handle_github_rate_limit(exc.response)
-            # Retry once
+            # Recreate client with the new token for the retry
+            retry_client = _auth_client_active()
             try:
-                data_dict = await _get(client, f"/repos/{owner}/{name}/readme")
+                data_dict = await _get(retry_client, f"/repos/{owner}/{name}/readme")
             except httpx.HTTPStatusError as exc2:
                 if exc2.response.status_code == 404:
                     return ""
                 raise
+            finally:
+                await retry_client.aclose()
             return _decode_base64_text(data_dict.get("content", ""))
         raise
     return _decode_base64_text(data_dict.get("content", ""))

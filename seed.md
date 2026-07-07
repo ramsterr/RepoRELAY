@@ -51,7 +51,7 @@ For repos with `embedded_at IS NULL` (any repo from seed that hasn't been embedd
 
 **Gemini mode** (`EMBEDDING_API=gemini`):
 - No local model needed — all embeddings via Gemini API
-- Sends description text (or README fallback) to `text-embedding-004`
+- Sends description text (or README fallback) to `gemini-embedding-001`
 - Returns 512-dim vectors (truncated from 768 via MRL)
 - Batch size: 50 per API call
 - Timeout: 45s per attempt, 3 retries

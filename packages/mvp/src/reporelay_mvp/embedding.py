@@ -5,7 +5,7 @@ Three modes:
   1. LOCAL — loads BAAI/bge-small-en-v1.5 (384 dims) in-process.
      Uses ~200MB RAM. Best for dev machines and bulk embedding.
 
-   2. GEMINI — calls Google text-embedding-004 (512 dims via MRL).
+  2. GEMINI — calls Google Gemini's embedding-001 (512 dims via MRL).
      Zero local RAM. Best for production (Render free tier + paid API).
 
   3. NONE — returns zeros. Fallback if no API key is configured.
@@ -42,7 +42,7 @@ _mode_lock = threading.Lock()
 DIMENSION = 512
 
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
-GEMINI_MODEL = "models/text-embedding-004"
+GEMINI_MODEL = "models/gemini-embedding-001"
 
 
 def _resolve_mode() -> str:
@@ -145,7 +145,7 @@ async def preloadModel() -> None:
 
 
 async def _embed_via_gemini(text_value: str) -> list[float]:
-    """Call Google text-embedding-004 with output_dimensionality=512.
+    """Call Google Gemini gemini-embedding-001 with output_dimensionality=512.
 
     Uses 45s timeout with 3 retries and brief backoff. Accepts both
     {'embedding': [...]} and {'embeddings': [[...]]} response shapes.

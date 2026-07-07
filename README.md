@@ -182,7 +182,7 @@ GitHub API ──► Postgres + pgvector + tsvector ──► Candidates ──�
 ```
 
 1. **Fetch** — repo metadata + README from GitHub API (dual token auto-rotation)
-2. **Embed** — description → 512-dim vector via Gemini `text-embedding-004` (or local `BAAI/bge-small-en-v1.5` with MRL truncation)
+2. **Embed** — description → 512-dim vector via Gemini `gemini-embedding-001` (or local `BAAI/bge-small-en-v1.5` with MRL truncation)
 3. **Candidates** — SQL filter (language/topics) ∪ pgvector ANN ∪ full-text search ∪ keyword overlap, deduplicated
 4. **Features** — 12 signals: description cosine sim, README vs desc cosine sim, README topic overlap, keyword match, keyword-topic match, topic overlap, language match, language diversity, dep overlap, star ratio, quality signal, trending boost
 5. **Score** — weighted sum with adaptive redistribution (hand-tuned, no training)
@@ -196,7 +196,7 @@ GitHub API ──► Postgres + pgvector + tsvector ──► Candidates ──�
 
 | Layer | Stack |
 |---|---|
-| Embedding | Gemini `text-embedding-004` (512 dims via MRL, production) / `BAAI/bge-small-en-v1.5` (384 dims, local dev) |
+| Embedding | Gemini `gemini-embedding-001` (512 dims via MRL, production) / `BAAI/bge-small-en-v1.5` (384 dims, local dev) |
 | Database | Postgres 16 + pgvector (HNSW index) + tsvector (full-text) + GIN (keyword arrays) |
 | API | FastAPI (async) |
 | Frontend | Astro 5 (static, Vercel) |

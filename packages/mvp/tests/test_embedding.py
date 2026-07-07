@@ -82,7 +82,7 @@ class TestEmbedText:
             assert len(result) == 512
             mock_genai.embed_content.assert_called_once()
             call_kwargs = mock_genai.embed_content.call_args.kwargs
-            assert call_kwargs["model"] == "models/text-embedding-004"
+            assert call_kwargs["model"] == "models/gemini-embedding-001"
             assert call_kwargs["task_type"] == "retrieval_document"
             assert call_kwargs["output_dimensionality"] == 512
 

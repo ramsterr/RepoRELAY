@@ -3,7 +3,7 @@
 There's no training, no ML pipeline, no model that learns. The system has four pieces that already know how to do their job:
 
 - **GitHub API** — tells you what a repo *is* (language, topics, stars, README)
-- **Gemini `text-embedding-004`** — Google's embedding API that turns text into 512 numbers. Triaged via MRL (Matryoshka Representation Learning) to fit pgvector. Knows that "Python web framework" and "async Python API" are similar concepts.
+- **Gemini `gemini-embedding-001`** — Google's embedding API that turns text into 512 numbers. Triaged via MRL (Matryoshka Representation Learning) to fit pgvector. Knows that "Python web framework" and "async Python API" are similar concepts.
 - **Keyword extractor** — extracts domain-specific terms from descriptions + READMEs (e.g. "machine learning", "computer vision", "shader")
 - **Postgres + pgvector + tsvector** — stores the data, finds repos with nearby embeddings, runs full-text search, and matches keyword arrays
 
@@ -285,7 +285,7 @@ When a `seed` is provided, each weight is jittered by +/-10% deterministically (
 
 ## The embedding model
 
-**Production (Render):** Gemini `text-embedding-004` via API. Outputs 768-dim vectors, truncated to 512 via MRL (Matryoshka Representation Learning). No local RAM cost — ideal for Render's free tier (512MB). Configured via `EMBEDDING_API=gemini` + `GEMINI_API_KEY`.
+**Production (Render):** Gemini `gemini-embedding-001` via API. Outputs 768-dim vectors, truncated to 512 via MRL (Matryoshka Representation Learning). No local RAM cost — ideal for Render's free tier (512MB). Configured via `EMBEDDING_API=gemini` + `GEMINI_API_KEY`.
 
 **Local dev:** `BAAI/bge-small-en-v1.5` from HuggingFace, loaded in-process. Produces 384-dim vectors natively. Configured via `EMBEDDING_API=local`.
 

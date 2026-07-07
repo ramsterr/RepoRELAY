@@ -121,26 +121,37 @@ def _configure_gemini() -> None:
 def _patch_string_utils_before_import() -> None:
     """Patch strip_oneof in google.generativeai.string_utils.
 
-    This MUST run before the first `import google.generativeai` because
-    the package's __init__.py imports types/safety_types/citation_types
-    which call strip_oneof() at module load time on protobuf __doc__
-    attributes that may be None.
+    This MUST run before `import google.generativeai` because its
+    __init__.py chain imports safety/citation types that call
+    strip_oneof() at module load time on protobuf __doc__ attrs
+    that may be None.
 
-    We use importlib to load only string_utils.py (avoiding the full
-    package import chain), patch it, then register it in sys.modules
-    so the subsequent full import picks up our patched version.
+    PyImport's find_spec / PathFinder both trigger parent package
+    __init__.py, so we bypass the import system entirely: find the
+    .py file on disk via sys.path, compile + exec it by hand, inject
+    the patched module into sys.modules.
     """
     import importlib.util
+    import os
     import sys
 
     try:
-        spec = importlib.util.find_spec("google.generativeai.string_utils")
-        if spec is None or spec.origin is None:
-            logger.warning("could not find string_utils spec — Gemini embed may fail")
+        found = None
+        for base in sys.path:
+            candidate = os.path.join(
+                base, "google", "generativeai", "string_utils.py"
+            )
+            if os.path.isfile(candidate):
+                found = candidate
+                break
+        if found is None:
+            logger.warning("string_utils.py not found on sys.path — Gemini embed may fail")
             return
 
-        # Load just string_utils, bypassing google.generativeai.__init__
-        module = importlib.util.module_from_spec(spec)
+        spec = importlib.util.spec_from_file_location(
+            "google.generativeai.string_utils", found
+        )
+        module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
         sys.modules["google.generativeai.string_utils"] = module
         spec.loader.exec_module(module)  # type: ignore[union-attr]
 

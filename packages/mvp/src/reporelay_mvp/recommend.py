@@ -506,57 +506,24 @@ async def recommend(
             except Exception as exc:
                 logger.info("  using description fallback for %s (GitHub may be rate-limited)", full_name)
 
-                # When GitHub is rate-limited, build a keyword-rich query from
-                # the source's description + repo name. Embedding the raw
-                # description over-weights incidental text (e.g. "Claude Code")
-                # and misses the domain signal. Extracting keywords first and
-                # embedding those gives a cleaner semantic vector.
+                # Embed the full description — it has the richest semantic
+                # signal. Google's text-embedding-004 handles sentence-level
+                # text well. Keywords are used for structured matching
+                # (keyword_match / keyword_topic_match scoring features),
+                # not for the embedding vector.
                 desc_text = source.description or ""
                 if desc_text and desc_text.strip():
                     try:
-                        from reporelay_mvp.keyword_extractor import extract_keywords
-                        keywords = extract_keywords(desc_text)
-                    except Exception:
-                        keywords = []
-
-                    # Build query from: name tokens + keywords (skip raw description)
-                    name_compounded = name.lower().replace("-", " ").replace("_", " ").replace(".", " ")
-                    name_parts = [t for t in name_compounded.split()
-                                  if t not in _generic_repo_names and len(t) >= 2]
-
-                    query_parts = []
-                    if name_parts:
-                        query_parts.append(" ".join(name_parts[:8]))
-                    if keywords:
-                        query_parts.append(" ".join(keywords[:12]))
-
-                    query_text = " ".join(query_parts)
-                    if query_text:
-                        try:
-                            query_emb = await embed_text(query_text)
-                            if is_real_vector(query_emb):
-                                source = source.model_copy(update={
-                                    "embedding": query_emb,
-                                    "description_embedding": query_emb,
-                                    "keywords": keywords,
-                                })
-                                embed_status = {"desc_emb": "desc-only", "readme_emb": "desc-only"}
-                                logger.info("  description-only embedding for %s (GitHub rate-limited)", full_name)
-                        except Exception as exc2:
-                            logger.warning("  description embed also failed for %s: %s", full_name, exc2)
-                    elif desc_text and desc_text.strip():
-                        # Last resort: no keywords extracted, embed raw description
-                        try:
-                            query_emb = await embed_text(desc_text.strip())
-                            if is_real_vector(query_emb):
-                                source = source.model_copy(update={
-                                    "embedding": query_emb,
-                                    "description_embedding": query_emb,
-                                })
-                                embed_status = {"desc_emb": "desc-only", "readme_emb": "desc-only"}
-                                logger.info("  description-only embedding for %s (GitHub rate-limited)", full_name)
-                        except Exception as exc2:
-                            logger.warning("  description embed also failed for %s: %s", full_name, exc2)
+                        query_emb = await embed_text(desc_text.strip())
+                        if is_real_vector(query_emb):
+                            source = source.model_copy(update={
+                                "embedding": query_emb,
+                                "description_embedding": query_emb,
+                            })
+                            embed_status = {"desc_emb": "desc-only", "readme_emb": "desc-only"}
+                            logger.info("  description-only embedding for %s (GitHub rate-limited)", full_name)
+                    except Exception as exc2:
+                        logger.warning("  description embed also failed for %s: %s", full_name, exc2)
 
             # ── Fallback to proxy if keyword extraction failed ──────────
             if not is_real_vector(source.description_embedding) and not is_real_vector(source.embedding):

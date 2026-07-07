@@ -5,7 +5,8 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://docs.python.org/3.12/)
-[![Stars](https://img.shields.io/github/stars/ramsterr/RepoRELAY?style=flat)](https://github.com/ramsterr/RepoRELAY/stargazers)
+[![Neon](https://img.shields.io/badge/DB-Neon-00E599?logo=neon&logoColor=white)](https://neon.tech)
+[![pgvector](https://img.shields.io/badge/vector-pgvector-4169E1?logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 [![Vercel](https://img.shields.io/badge/frontend-Vercel-black?logo=vercel)](https://reporelay-site.vercel.app)
 [![Render](https://img.shields.io/badge/API-Render-46E3B7?logo=render)](https://reporelay-mvp-api-0w1k.onrender.com)
 [![Embeddings](https://img.shields.io/badge/embeddings-Gemini-4285F4?logo=google)](https://ai.google.dev/gemini-api/docs/embeddings)

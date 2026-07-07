@@ -106,35 +106,55 @@ def _configure_gemini() -> None:
                 "Get a free key at https://aistudio.google.com/"
             )
 
+        # Patch BEFORE importing google.generativeai — the deprecated
+        # SDK v0.8.6 has a bug where strip_oneof(docstring) calls
+        # docstring.splitlines() without checking for None. This
+        # crashes during module import (class __doc__ assignments).
+        _patch_string_utils_before_import()
+
         import google.generativeai as genai
 
         genai.configure(api_key=api_key)  # type: ignore[attr-defined]
-
-        _patch_string_utils()
-
         _gemini_configured = True
 
 
-def _patch_string_utils() -> None:
-    """Patch a bug in google-generativeai v0.8.6 (deprecated SDK).
+def _patch_string_utils_before_import() -> None:
+    """Patch strip_oneof in google.generativeai.string_utils.
 
-    `strip_oneof(docstring)` calls `docstring.splitlines()` without
-    checking for None. When protobuf fields lack docstrings, this
-    crashes with: 'NoneType' object has no attribute 'splitlines'.
+    This MUST run before the first `import google.generativeai` because
+    the package's __init__.py imports types/safety_types/citation_types
+    which call strip_oneof() at module load time on protobuf __doc__
+    attributes that may be None.
+
+    We use importlib to load only string_utils.py (avoiding the full
+    package import chain), patch it, then register it in sys.modules
+    so the subsequent full import picks up our patched version.
     """
-    try:
-        import google.generativeai.string_utils as su
+    import importlib.util
+    import sys
 
-        _original_strip_oneof = su.strip_oneof
+    try:
+        spec = importlib.util.find_spec("google.generativeai.string_utils")
+        if spec is None or spec.origin is None:
+            logger.warning("could not find string_utils spec — Gemini embed may fail")
+            return
+
+        # Load just string_utils, bypassing google.generativeai.__init__
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["google.generativeai.string_utils"] = module
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+
+        _original_strip_oneof = module.strip_oneof
 
         def _patched_strip_oneof(docstring):
             if docstring is None:
                 return ""
             return _original_strip_oneof(docstring)
 
-        su.strip_oneof = _patched_strip_oneof  # type: ignore[attr-defined]
+        module.strip_oneof = _patched_strip_oneof  # type: ignore[attr-defined]
+        logger.debug("patched google.generativeai.string_utils.strip_oneof")
     except Exception:
-        pass
+        logger.warning("failed to patch string_utils — Gemini embed may fail", exc_info=True)
 
 
 def _load_model() -> Any:

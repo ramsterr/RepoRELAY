@@ -364,14 +364,20 @@ async def recommend(
     if not owner or not name:
         raise LookupError(f"repo must be 'owner/name', got {full_name!r}")
 
-    # Check cache first
+    # Check cache first — but skip if the previous result had failed
+    # embeddings (the cache entry was stored before our fix).
     cache_key = _rec_cache_key(full_name, seed, tags)
     cache_now = _rec_time.monotonic()
     cached = _rec_cache_get(cache_key, cache_now)
     if cached is not None:
-        logger.info("rec cache hit for %s", cache_key)
-        cached.from_cache = True
-        return cached
+        emb_status = getattr(cached, "embed_status", {})
+        if emb_status.get("desc_emb") == "missing" and emb_status.get("readme_emb") == "missing":
+            logger.info("rec cache hit for %s but embeddings were missing — recomputing", cache_key)
+            del _rec_cache[cache_key]
+        else:
+            logger.info("rec cache hit for %s", cache_key)
+            cached.from_cache = True
+            return cached
 
     session = await data.get_session()
     try:
@@ -601,7 +607,10 @@ async def recommend(
         result = categorize_results(source, scored, limit, seed)
         result.embed_status = embed_status
         result.from_cache = False
-        _rec_cache_set(cache_key, cache_now, result)
+        # Don't cache results where both embeddings are missing —
+        # next request should retry the full embed flow.
+        if embed_status.get("desc_emb") != "missing" or embed_status.get("readme_emb") != "missing":
+            _rec_cache_set(cache_key, cache_now, result)
         logger.info("TOTAL recommend() took %.1fs for %s (%d groups, %d repos)",
                     _time.monotonic() - _t0, full_name,
                     len(result.groups), len(result.flat_repos))

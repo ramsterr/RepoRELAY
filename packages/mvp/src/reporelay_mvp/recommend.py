@@ -52,8 +52,10 @@ from reporelay_mvp.models import (
 from reporelay_mvp.rerank import rerank
 from reporelay_mvp.score import score_many
 from reporelay_mvp.settings import get_mvp_settings
+from reporelay_mvp.purpose import clean_description
 
 logger = logging.getLogger(__name__)
+
 
 SEARCH_LIMIT = 100  # how many fresh candidates to pull from GitHub per call
 
@@ -468,7 +470,7 @@ async def recommend(
 
                 # Priority 1: Description (most purpose-dense text)
                 if desc_text and desc_text.strip():
-                    query_parts.append(desc_text.strip())
+                    query_parts.append(clean_description(desc_text))
 
                 # Priority 2: Repo name tokens (differentiating signal)
                 # Include composite name: "ai-job-search" → "ai job search"
@@ -514,7 +516,7 @@ async def recommend(
                 desc_text = source.description or ""
                 if desc_text and desc_text.strip():
                     try:
-                        query_emb = await embed_text(desc_text.strip())
+                        query_emb = await embed_text(clean_description(desc_text))
                         if is_real_vector(query_emb):
                             source = source.model_copy(update={
                                 "embedding": query_emb,
@@ -561,7 +563,7 @@ async def recommend(
                         desc = get_effective_description(desc_text, readme_text) or desc_text or readme_text[:200].replace("\n", " ")
 
                         desc_emb, readme_emb = await asyncio.wait_for(
-                            asyncio.gather(embed_text(desc), embed_text(readme_text[:8000])),
+                            asyncio.gather(embed_text(clean_description(desc)), embed_text(readme_text[:8000])),
                             timeout=25.0,
                         )
                         if is_real_vector(readme_emb):
@@ -806,7 +808,7 @@ async def _embed_description_fast(
 
     # 3. Embed the description (1 Gemini call — the fast part)
     try:
-        desc_emb = await embed_text(effective_description)
+        desc_emb = await embed_text(clean_description(effective_description))
     except Exception as exc:
         logger.exception("description embedding failed for %s/%s", owner, name)
         raise EmbedError(f"description embedding failed for {owner}/{name}: {exc}") from exc
@@ -971,7 +973,7 @@ async def _embed_source_live(
 
     # 3. Embed the effective description
     try:
-        desc_emb = await embed_text(effective_description)
+        desc_emb = await embed_text(clean_description(effective_description))
     except Exception as exc:
         logger.exception("description embedding failed for %s/%s", owner, name)
         raise EmbedError(

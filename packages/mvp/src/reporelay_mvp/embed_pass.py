@@ -35,7 +35,7 @@ from reporelay_mvp.embedding import (
 )
 from reporelay_mvp.github import _auth_client, fetch_readme
 from reporelay_mvp.keyword_extractor import extract_keywords_from_repo
-from reporelay_mvp.purpose import get_effective_description
+from reporelay_mvp.purpose import get_effective_description, clean_description
 from reporelay_mvp.settings import get_mvp_settings
 
 logger = logging.getLogger(__name__)
@@ -252,7 +252,7 @@ async def embed_top(
                 all_texts.append(readme)
                 text_meta.append((repo_id, "readme"))
             if desc and desc.strip():
-                all_texts.append(desc)
+                all_texts.append(clean_description(desc))
                 text_meta.append((repo_id, "desc"))
 
         chunk_size = batch_size

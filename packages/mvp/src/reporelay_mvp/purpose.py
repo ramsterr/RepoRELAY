@@ -250,3 +250,42 @@ def get_effective_description(
         if extracted and len(extracted) >= _MIN_DESC_LEN:
             return extracted
     return ""
+
+
+# ── Description cleaning for embedding ──────────────────────────────
+# Strips AI-brand buzzwords and instructional fluff that dominate
+# semantic vectors without adding domain signal. Used before embedding
+# descriptions at both storage time and query time.
+
+_BUZZ_PATTERNS = [
+    # AI brand names / model IDs
+    r"\bClaude\b",        r"\bGemini\b",
+    r"\bOpenAI\b",        r"\bChatGPT\b",
+    r"\bGPT[-\s]*\d*\b",  r"\bLLM[s]?\b",
+    # Filler implementation phrases
+    r"\bAI[-\s]*powered\b",  r"\bpowered by\b",
+    r"\bbuilt (on|with|using)\b\s*\S+",
+    r"\bwritten in\s+\S+",
+    # Command verbs in descriptions
+    r"\bFork it,?\s*",
+    r"\bclone (this|the) repo,?\s*",
+]
+_INSTRUCTIONAL = [
+    r",?\s*fill in your\s*\S*",
+    r",?\s*let \S+ (evaluate|do|handle|manage|process).*?(?=[,.]|$)",
+    r",?\s*check (out|it out).*?(?=[,.]|$)",
+    r",?\s*(please |feel free to |be sure to |don't forget to ).*?(?=[,.]|$)",
+    r",?\s*(contributions? |star[s]? |fork[s]? ).*?(?=[,.]|$)",
+]
+
+
+def clean_description(text: str) -> str:
+    """Strip buzzwords and fluff; keep domain signal for embedding."""
+    for pat in _BUZZ_PATTERNS:
+        text = re.sub(pat, "", text, flags=re.IGNORECASE)
+    for pat in _INSTRUCTIONAL:
+        text = re.sub(pat, "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    text = re.sub(r"^\W+|\W+$", "", text)
+    text = re.sub(r"\s*,\s*,?\s*", ", ", text).strip(" ,")
+    return text.strip() if len(text.strip()) > 10 else text

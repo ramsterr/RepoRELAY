@@ -22,7 +22,7 @@ import httpx
 from reporelay_mvp import data
 from reporelay_mvp.embedding import embed_text
 from reporelay_mvp.models import Repo
-from reporelay_mvp.purpose import get_effective_description
+from reporelay_mvp.purpose import get_effective_description, clean_description
 from reporelay_mvp.settings import get_mvp_settings
 from reporelay_mvp.topic_inference import infer_topics_for_repo
 
@@ -538,7 +538,7 @@ async def enrich_repo(owner: str, name: str) -> None:
                     dependencies=existing.dependencies,
                 )
                 # Re-embed the description so the new text gets a vector
-                desc_emb = await embed_text(effective_desc)
+                desc_emb = await embed_text(clean_description(effective_desc))
                 await data.set_description_embedding(
                     session, repo_id=existing.id, description_embedding=desc_emb,
                 )
@@ -627,7 +627,7 @@ async def save_repo(owner: str, name: str) -> int:
                 embedding = await embed_text(readme[:8000])
                 await data.set_embedding(session, repo_id=repo_id, embedding=embedding)
             if description:
-                desc_emb = await embed_text(description)
+                desc_emb = await embed_text(clean_description(description))
                 await data.set_description_embedding(
                     session, repo_id=repo_id, description_embedding=desc_emb,
                 )

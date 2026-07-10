@@ -95,7 +95,7 @@ _DISK_CACHE_PATH = Path(
     os.environ.get("REPORE_LAY_SEARCH_CACHE")
     or Path(tempfile.gettempdir()) / "reporelay_search_cache.json"
 )
-_MIN_DB_POOL_FOR_SKIP = 200  # if DB pool is already this big, skip the GitHub search
+_MIN_DB_POOL_FOR_SKIP = 300  # if DB pool is already this big, skip the GitHub search
 
 _SEARCH_CACHE: dict[str, dict[str, Any]] = {}
 
@@ -619,6 +619,15 @@ async def recommend(
         await session.close()
 
 
+def _pool_fraction(pool_size: int, fraction: float, min_val: int, max_val: int) -> int:
+    """Compute a soft cap as a fraction of the deduped pool, clamped.
+
+    Ensures category sizes scale with pool breadth: a deep pool of 300
+    unique owners gets more slots per category than a shallow pool of 80.
+    """
+    return max(min_val, min(max_val, int(pool_size * fraction)))
+
+
 def categorize_results(
     source: Repo,
     scored: list[tuple[Repo, float, Features]],
@@ -627,25 +636,25 @@ def categorize_results(
 ) -> CategorizedRecommendation:
     """Split scored candidates into labeled groups by primary signal.
 
-    Groups are ordered by relevance:
-      1. Score Matched — highest overall semantic match (always first)
-      2. Topic-specific categories — one per source topic (dynamic)
-      3. Cross-Discovery — different language, still related
-      4. More Recommendations — everything else
+    Categories are ordered by relevance intent:
+      1. Top Picks — best overall composite scores
+      2. Topic-specific — one category per source topic (dynamic)
+      3. Same Stack — repos sharing dependencies
+      4. Hidden Gems — high semantic relevance, lower popularity
+      5. Cross-Language — different language, related concepts
+      6. Trending — repos gaining traction
+      7. Also Good — remaining quality candidates
 
-    For a source repo with topics ['self-hosted', 'game', 'ai'],
-    the groups would be:
-      - Score Matched
-      - self-hosted repos
-      - game repos
-      - ai repos
-      - Cross-Discovery
-      - More Recommendations
+    Caps are soft and scale with the deduped pool size. No hard
+    total cap — the pool's natural size (~200–250 unique owners
+    for 51K corpus) bounds total output to ~45–70 repos.
+
+    See pool_size.md for corpus-to-pool scaling guidance.
     """
     source_lang = source.language.lower() if source.language else None
     source_owner = source.owner.lower()
 
-    # Filter out source repo and same-owner repos
+    # ── Filter and deduplicate by owner ───────────────────────────
     filtered = [
         (repo, sc, feats) for repo, sc, feats in scored
         if repo.id != source.id
@@ -653,7 +662,6 @@ def categorize_results(
     ]
     filtered.sort(key=lambda x: x[1], reverse=True)
 
-    # Deduplicate by owner
     seen_owners: set[str] = set()
     deduped: list[tuple[Repo, float, Features]] = []
     for repo, sc, feats in filtered:
@@ -663,27 +671,31 @@ def categorize_results(
         seen_owners.add(owner)
         deduped.append((repo, sc, feats))
 
+    pool_n = len(deduped)
     used_ids: set[int] = set()
     groups: list[RecommendationGroup] = []
 
-    # ── Group 1: Score Matched (highest overall scores) — ALWAYS FIRST ──
-    top_scored = sorted(deduped, key=lambda x: x[1], reverse=True)
-    g = _make_group(top_scored, "Score Matched", "highest semantic match", used_ids, 5)
+    # ── Group 1: Top Picks — best overall composite scores ─────────
+    top_n = _pool_fraction(pool_n, 0.06, 4, 10)
+    top_candidates = sorted(deduped, key=lambda x: x[1], reverse=True)
+    g = _make_group(top_candidates, "Top Picks", "best overall match", used_ids, top_n,
+                     source_topics=source.topics)
     if g:
         groups.append(g)
 
-    # ── Group 2: Dynamic categories from source topics ────────────────
-    # Filter out the source language from topics (it's not a real topic)
+    # ── Group 2: Topic categories (one per source topic) ──────────
     src_lang_lower = (source.language or "").lower()
     meaningful_topics = [
         t for t in source.topics
         if t.lower() not in (src_lang_lower, "") and len(t) > 1
     ]
-    # Take up to 4 most specific topics (longer topics are more specific)
     meaningful_topics.sort(key=lambda t: -len(t))
-    meaningful_topics = meaningful_topics[:4]
 
+    topic_n = _pool_fraction(pool_n, 0.025, 2, 5)
+    _max_topic_groups = 8
     for topic in meaningful_topics:
+        if len(groups) >= _max_topic_groups + 1:
+            break
         topic_lower = topic.lower()
         topic_matches = [
             r for r in deduped
@@ -691,26 +703,73 @@ def categorize_results(
             and any(t.lower() == topic_lower for t in r[0].topics)
         ]
         if topic_matches:
-            g = _make_group(topic_matches, topic.title(), f"{topic} repos", used_ids, 4)
+            g = _make_group(topic_matches, topic.title(), f"repos tagged {topic}", used_ids, topic_n,
+                            source_topics=source.topics)
             if g:
                 groups.append(g)
 
-    # ── Group 3: Cross-Discovery — different language, still related ──
-    if source_lang:
-        cross = [r for r in deduped
-                 if r[0].id not in used_ids
-                 and r[0].language and r[0].language.lower() != source_lang
-                 and (r[2].topic_overlap > 0.05 or r[2].readme_vs_desc_cosine_sim > 0.15)]
-        g = _make_group(cross, "Cross-Discovery",
-                       "different language, related topic", used_ids, 4)
+    # ── Group 3: Same Stack — shared dependencies ─────────────────
+    deps_n = _pool_fraction(pool_n, 0.025, 2, 5)
+    same_stack = [
+        r for r in deduped
+        if r[0].id not in used_ids
+        and r[2].dep_overlap > 0.0
+    ]
+    if same_stack:
+        g = _make_group(same_stack, "Same Stack", "shared dependencies & tooling", used_ids, deps_n,
+                        source_topics=source.topics)
         if g:
             groups.append(g)
 
-    # ── Group 4: More Recommendations (remaining) ─────────────────────
-    remaining = [r for r in deduped if r[0].id not in used_ids]
+    # ── Group 4: Hidden Gems — high relevance + low popularity ────
+    gems_n = _pool_fraction(pool_n, 0.025, 2, 5)
+    hidden_gems = [
+        r for r in deduped
+        if r[0].id not in used_ids
+        and r[2].readme_vs_desc_cosine_sim > 0.6
+        and r[2].star_ratio < 0.3
+    ]
+    if hidden_gems:
+        g = _make_group(hidden_gems, "Hidden Gems", "high relevance, less discovered", used_ids, gems_n,
+                        source_topics=source.topics)
+        if g:
+            groups.append(g)
+
+    # ── Group 5: Cross-Language — different language, similar ideas ──
+    cross_n = _pool_fraction(pool_n, 0.035, 3, 8)
+    if source_lang:
+        cross = [
+            r for r in deduped
+            if r[0].id not in used_ids
+            and r[0].language and r[0].language.lower() != source_lang
+            and (r[2].topic_overlap > 0.05 or r[2].readme_vs_desc_cosine_sim > 0.15)
+        ]
+        if cross:
+            g = _make_group(cross, "Cross-Language", "different language, similar ideas", used_ids, cross_n,
+                            source_topics=source.topics)
+            if g:
+                groups.append(g)
+
+    # ── Group 6: Trending — gaining traction ──────────────────────
+    trending_n = _pool_fraction(pool_n, 0.02, 1, 4)
+    trending = [
+        r for r in deduped
+        if r[0].id not in used_ids
+        and r[2].trending_boost > 0.0
+        and r[1] > 0.1
+    ]
+    if trending:
+        g = _make_group(trending, "Trending", "rising in popularity", used_ids, trending_n,
+                        source_topics=source.topics)
+        if g:
+            groups.append(g)
+
+    # ── Group 7: Also Good — remaining above quality threshold ────
+    remaining_n = _pool_fraction(pool_n, 0.10, 5, 15)
+    remaining = [r for r in deduped if r[0].id not in used_ids and r[1] > 0.08]
     if remaining:
-        g = _make_group(remaining, "More Recommendations", "similar repos",
-                       used_ids, min(8, len(remaining)))
+        g = _make_group(remaining, "Also Good", "more repos you might like", used_ids, remaining_n,
+                        source_topics=source.topics)
         if g:
             groups.append(g)
 
@@ -731,21 +790,25 @@ def _make_group(
     signal: str,
     used_ids: set[int],
     max_repos: int,
+    *,
+    source_topics: list[str] | None = None,
 ) -> RecommendationGroup | None:
-    repos = []
+    src_topics = set(source_topics or [])
+    repos: list[ScoredRepo] = []
     for repo, sc, feats in candidates:
         if repo.id in used_ids:
             continue
         if len(repos) >= max_repos:
             break
         used_ids.add(repo.id)
+        shared = [t for t in repo.topics if t.lower() in (st.lower() for st in src_topics)]
         repos.append(ScoredRepo(
             id=repo.id, owner=repo.owner, name=repo.name,
             full_name=repo.full_name, description=repo.description,
             language=repo.language, topics=repo.topics, stars=repo.stars,
             dependencies=repo.dependencies, score=sc,
             features=feats.as_dict(),
-            shared_topics=[],
+            shared_topics=shared,
             shared_language=feats.language_match >= 1.0,
         ))
     if not repos:

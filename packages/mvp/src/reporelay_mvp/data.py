@@ -604,15 +604,27 @@ async def _fetch_vector_neighbors(
     column: str,
 ) -> dict[int, tuple[Repo, float]]:
     """pgvector ANN: nearest neighbors of a source embedding against a column.
-    
+
     The source embedding is passed in directly (in-memory, freshly computed).
     No DB join — we use CAST(:param AS vector) for the computation.
-    
+
+    Sets `hnsw.ef_search = max(limit * 2, 100)` on the session to
+    maintain high ANN recall at the requested limit. Without this,
+    pgvector defaults ef_search to max(limit, 40), which causes
+    noticeable recall degradation above ~100 neighbors on 50k+ vectors.
+
     Returns a dict mapping repo_id -> (Repo, cosine_similarity).
     Returns an empty dict if source_embedding is empty/zero/NaN.
     """
     if not source_embedding or all(v == 0.0 for v in source_embedding):
         return {}
+
+    _ef_search = max(limit * 2, 100)
+    await session.execute(
+        text("SET LOCAL hnsw.ef_search = :ef"),
+        {"ef": _ef_search},
+    )
+
     rows = await session.execute(
         text(
             f"""

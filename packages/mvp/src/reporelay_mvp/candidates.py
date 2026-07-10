@@ -4,13 +4,11 @@ Stage 3 of the MVP pipeline: candidate generation.
 Three pools, merged and deduplicated:
   1. SQL pool: same language OR topic overlap — uses GIN + btree indexes.
   2. README-vs-desc vector pool: source's README embedding against DB's
-     description_embedding column (pgvector ANN on ~51K vectors).
+     description_embedding column (pgvector ANN on the 11K-strong column).
   3. Description-vs-desc vector pool: source's description embedding
      against DB's description_embedding column.
 
-Default pool sizes are tuned for a corpus of ~50K repos. The result
-is a pool of ~600-700 candidates ready for scoring. See pool_size.md
-for scaling guidance as the corpus grows.
+The result is a pool of ~300-400 candidates ready for scoring.
 """
 
 from __future__ import annotations
@@ -33,8 +31,8 @@ async def generate_candidates(
     session: AsyncSession,
     source: Repo,
     *,
-    pool_size: int = 400,
-    vector_k: int = 200,
+    pool_size: int = 250,
+    vector_k: int = 100,
     seed: int | None = None,
     tags: list[str] | None = None,
 ) -> list[tuple[Repo, float]]:

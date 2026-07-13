@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: reporelay-mvp-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.api
+    dockerContext: .
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: EMBEDDING_API
+        value: "gemini"
+      - key: PORT
+        value: "8000"

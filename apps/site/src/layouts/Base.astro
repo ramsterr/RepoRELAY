@@ -1,0 +1,1314 @@
+---
+import "../styles/global.css";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RepoRelay — find repos worth your time</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="preload"
+      as="style"
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400..700;1,14..32,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400..700;1,14..32,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <script is:inline>
+      (function () {
+        try {
+          var stored = localStorage.getItem("rr-theme");
+          if (stored === "light" || stored === "dark") {
+            document.documentElement.setAttribute("data-theme", stored);
+          } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+            document.documentElement.setAttribute("data-theme", "light");
+          } else {
+            document.documentElement.setAttribute("data-theme", "dark");
+          }
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
+    <script is:inline>
+      (function () {
+        function mulberry32(a) {
+          return function () {
+            a |= 0; a = (a + 0x6d2b79f5) | 0;
+            var t = a;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+          };
+        }
+
+        function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+        function lerp(a, b, t) { return a + (b - a) * t; }
+        function floor(n) { return Math.floor(n); }
+        function ceil(n) { return Math.ceil(n); }
+        function round(n) { return Math.round(n); }
+        function abs(n) { return Math.abs(n); }
+        function sqrt(n) { return Math.sqrt(n); }
+        function sin(n) { return Math.sin(n); }
+        function cos(n) { return Math.cos(n); }
+        function atan2(y, x) { return Math.atan2(y, x); }
+        function max(a, b) { return Math.max(a, b); }
+        function min(a, b) { return Math.min(a, b); }
+        function pow(a, b) { return Math.pow(a, b); }
+        function log(n) { return Math.log(n); }
+
+        function hexToRgb(hex) {
+          var r = parseInt(hex.slice(1, 3), 16);
+          var g = parseInt(hex.slice(3, 5), 16);
+          var b = parseInt(hex.slice(5, 7), 16);
+          return { r: r, g: g, b: b };
+        }
+        function rgbToHex(r, g, b) {
+          return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+        }
+        function shade(hex, percent) {
+          var rgb = hexToRgb(hex);
+          var r = clamp(Math.round(rgb.r * (1 + percent)), 0, 255);
+          var g = clamp(Math.round(rgb.g * (1 + percent)), 0, 255);
+          var b = clamp(Math.round(rgb.b * (1 + percent)), 0, 255);
+          return rgbToHex(r, g, b);
+        }
+        function alpha(hex, a) {
+          var rgb = hexToRgb(hex);
+          return "rgba(" + rgb.r + "," + rgb.g + "," + rgb.b + "," + a + ")";
+        }
+
+        function makeNoise(rand) {
+          var grid = [];
+          for (var i = 0; i < 64; i++) { grid[i] = []; for (var j = 0; j < 64; j++) grid[i][j] = rand(); }
+          return function (x, y) {
+            var xi = floor(x) & 63, yi = floor(y) & 63;
+            var xf = x - floor(x), yf = y - floor(y);
+            var tl = grid[yi][xi], tr = grid[yi][(xi + 1) & 63];
+            var bl = grid[(yi + 1) & 63][xi], br = grid[(yi + 1) & 63][(xi + 1) & 63];
+            var sx = xf * xf * (3 - 2 * xf), sy = yf * yf * (3 - 2 * yf);
+            return lerp(lerp(tl, tr, sx), lerp(bl, br, sx), sy);
+          };
+        }
+
+        function makeSeeds(rand, cols, rows, count) {
+          var s = [];
+          for (var i = 0; i < count; i++) s.push({ x: rand() * cols, y: rand() * rows });
+          return s;
+        }
+        function nearestDistSq(x, y, seeds) {
+          var best = 1e9;
+          for (var i = 0; i < seeds.length; i++) {
+            var dx = x - seeds[i].x, dy = y - seeds[i].y;
+            var d2 = dx * dx + dy * dy;
+            if (d2 < best) best = d2;
+          }
+          return best;
+        }
+
+        function isLight() {
+          return document.documentElement.getAttribute("data-theme") === "light";
+        }
+
+        var THEMES = [
+          {
+            name: "aurora",
+            icon: "✦",
+            cellSize: 16,
+            dark: ["#0b1026", "#142850", "#1f5f6b", "#2ecc71", "#a3ffce"],
+            light: ["#e8f4f8", "#9bd3e6", "#4db6ac", "#2e8b7b", "#0d5c4d"],
+            accent: "#2ecc71",
+            animation: {
+              css: "@keyframes rr-shimmer{0%,100%{opacity:0.6}50%{opacity:1}}.rr-shimmer{animation:rr-shimmer 4s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
+              cellClass: function(v,x,y,cols,rows){return v>0.78?{"class":"rr-shimmer",style:"animation-delay:"+((x*0.12+y*0.08)%4)+"s"}:null;}
+            },
+            fn: function (c, rand, cols, rows) {
+              var noise = makeNoise(rand);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var ny = y / rows;
+                var wave = sin(x * 0.025 + noise(x * 0.03, y * 0.06) * 5) * 0.5 + 0.5;
+                var fade = 1 - ny * 0.85;
+                var shimmer = 0.65 + 0.35 * noise(x * 0.08 + 50, y * 0.04 + 30);
+                this.push(clamp(wave * fade * shimmer, 0, 1));
+              }
+            }
+          },
+          {
+            name: "ocean",
+            icon: "≈",
+            cellSize: 12,
+            dark: ["#03142b", "#0a3a62", "#176fa8", "#2aa4d8", "#7ee7ff"],
+            light: ["#e6f4fa", "#8ecae6", "#219ebc", "#126782", "#023047"],
+            accent: "#2aa4d8",
+            animation: {
+              css: "@keyframes rr-foam{0%,100%{opacity:0.5}50%{opacity:1}}.rr-foam{animation:rr-foam 3s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
+              cellClass: function(v,x,y,cols,rows){return v>0.75&&y<rows*0.25?{"class":"rr-foam",style:"animation-delay:"+((x*0.15)%3)+"s"}:null;}
+            },
+            fn: function (c, rand, cols, rows) {
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var nx = x / cols, ny = y / rows;
+                var s1 = sin(nx * 12 + ny * 2) * 0.5 + 0.5;
+                var s2 = sin(nx * 7 - ny * 4 + 2) * 0.5 + 0.5;
+                var s3 = sin(nx * 18 + ny * 6 + 5) * 0.5 + 0.5;
+                var depth = (s1 * 0.45 + s2 * 0.3 + s3 * 0.25) * (1 - ny * 0.7);
+                var foam = (ny < 0.12) ? 0.15 * (1 - ny / 0.12) : 0;
+                this.push(clamp(depth + foam, 0, 1));
+              }
+            }
+          },
+          {
+            name: "stars",
+            icon: "⋆",
+            cellSize: 14,
+            dark: ["#0a0a1a", "#1a1a3e", "#4a4a8a", "#a29bfe", "#ffffff"],
+            light: ["#f0f0ff", "#c9c9f5", "#8e8edb", "#5b5bbd", "#2a2a6a"],
+            accent: "#a29bfe",
+            animation: {
+              css: "@keyframes rr-twinkle{0%,100%{opacity:0.25}50%{opacity:1}}.rr-twinkle{animation:rr-twinkle 3s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
+              cellClass: function(v,x,y,cols,rows){return v>0.82?{"class":"rr-twinkle",style:"animation-delay:"+((x*0.2+y*0.15)%3)+"s"}:null;}
+            },
+            fn: function (c, rand, cols, rows) {
+              var minDim = min(cols, rows);
+              var cx = cols / 2, cy = rows / 2;
+              var noise = makeNoise(rand);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var dx = (x - cx) / minDim, dy = (y - cy) / minDim;
+                var dist = sqrt(dx * dx + dy * dy);
+                var angle = atan2(dy, dx);
+                var logR = log(1 + dist * 2.5);
+                var spiral = (sin(angle * 2.5 + logR * 5) * 0.5 + 0.5);
+                var armFade = clamp(1 - dist * 1.8, 0, 1);
+                var arm = spiral * armFade * 0.6;
+                var n = noise(x * 0.12, y * 0.12);
+                var star = (n > 0.86) ? 0.7 + (n - 0.86) * 6 : 0;
+                this.push(clamp(arm + star * 0.65, 0, 1));
+              }
+            }
+          },
+          {
+            name: "peaks",
+            icon: "⩘",
+            cellSize: 14,
+            dark: ["#0f1724", "#1e3a5f", "#2d5a87", "#5a9fd4", "#b8e3ff"],
+            light: ["#f1f5f9", "#cbd5e1", "#94a3b8", "#64748b", "#334155"],
+            accent: "#5a9fd4",
+            fn: function (c, rand, cols, rows) {
+              var ridges = [];
+              for (var i = 0; i < 5; i++) ridges.push({ x: rand() * cols, h: 0.3 + rand() * 0.6, w: 0.15 + rand() * 0.25 });
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var nx = x / cols, ny = y / rows;
+                var peak = 0;
+                for (var i = 0; i < ridges.length; i++) {
+                  var r2 = ridges[i], nx2 = r2.x / cols;
+                  var d = abs(nx - nx2) / r2.w;
+                  if (d < 1) { var h = r2.h * (1 - d * d); if (h > peak) peak = h; }
+                }
+                var base = (1 - ny) * 0.25;
+                var value = clamp(peak * 0.8 + base * 0.3, 0, 1);
+                var jitter = (rand() - 0.5) * 0.08;
+                this.push(clamp(value + jitter, 0, 1));
+              }
+            }
+          },
+          {
+            name: "gems",
+            icon: "◇",
+            cellSize: 20,
+            dark: ["#1a0b2e", "#431c5d", "#7c3aed", "#c084fc", "#f3e8ff"],
+            light: ["#faf5ff", "#e9d5ff", "#c084fc", "#9333ea", "#581c87"],
+            accent: "#c084fc",
+            fn: function (c, rand, cols, rows) {
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var dx = abs((x % 10) - 5), dy = abs((y % 10) - 5);
+                var dist = dx + dy;
+                var value = clamp(1 - dist / 8, 0, 1);
+                var shimmer = 0.8 + 0.2 * (rand() - 0.5);
+                this.push(clamp(value * shimmer, 0, 1));
+              }
+            }
+          },
+          {
+            name: "forest",
+            icon: "⫾",
+            cellSize: 12,
+            dark: ["#051208", "#0f291e", "#1a5233", "#2e8b57", "#7ee787"],
+            light: ["#f0fdf4", "#bbf7d0", "#4ade80", "#16a34a", "#14532d"],
+            accent: "#2e8b57",
+            fn: function (c, rand, cols, rows) {
+              var noise = makeNoise(rand);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var ny = y / rows, nx = x / cols;
+                var treeHeight = 0.4 + noise(x * 0.18, 0) * 0.5;
+                var treeTop = 1 - treeHeight;
+                var v;
+                if (ny < treeTop) {
+                  var starN = noise(x * 0.5, y * 0.5);
+                  v = starN > 0.93 ? 0.55 + (starN - 0.93) * 7 : 0;
+                } else {
+                  var colMod = x % 4;
+                  var distFromTrunk = abs(colMod - 1.5);
+                  var foliage = clamp(1 - distFromTrunk / 2.5, 0, 1) * 0.7;
+                  var trunk = distFromTrunk < 0.5 ? 0.5 : 0;
+                  var jitter = noise(x * 0.3, y * 0.3) * 0.2;
+                  v = clamp(trunk + foliage + jitter, 0, 1) * clamp(1 - (ny - treeTop) * 0.3, 0, 1);
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "matrix",
+            icon: "⏐",
+            cellSize: 10,
+            dark: ["#020a02", "#063a06", "#0a8a0a", "#15d815", "#aaffaa"],
+            light: ["#f0fdf0", "#bbf7bb", "#22c522", "#15803d", "#14532d"],
+            accent: "#15d815",
+            animation: {
+              css: "@keyframes rr-stream{0%{opacity:0.2}50%{opacity:1}100%{opacity:0.2}}.rr-stream{animation:rr-stream 1.8s linear infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
+              cellClass: function(v,x,y,cols,rows){return v>0.82?{"class":"rr-stream",style:"animation-delay:"+((x*0.15+y*0.05)%1.8)+"s"}:null;}
+            },
+            fn: function (c, rand, cols, rows) {
+              var noise = makeNoise(rand);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var nx = x / cols, ny = y / rows;
+                var colPhase = noise(nx * 4, 0) * 5;
+                var streamY = (ny * 8 + colPhase) % 1;
+                var v = 0;
+                if (streamY < 0.4) v = (1 - streamY / 0.4) * 0.9;
+                v *= 0.6 + 0.4 * noise(nx * 8, ny * 4);
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "comb",
+            icon: "⬢",
+            cellSize: 18,
+            dark: ["#111827", "#374151", "#6b7280", "#fbbf24", "#fef3c7"],
+            light: ["#f9fafb", "#e5e7eb", "#9ca3af", "#f59e0b", "#78350f"],
+            accent: "#fbbf24",
+            fn: function (c, rand, cols, rows) {
+              var minDim = min(cols, rows);
+              var size = max(2.5, minDim / 24);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var row = floor(y / (size * 1.5));
+                var isOddRow = row % 2;
+                var hx = (floor(x / (size * 1.732)) + (isOddRow ? 0.5 : 0)) * size * 1.732;
+                var hy = row * size * 1.5;
+                var dx = x - hx, dy = y - hy;
+                var dist = sqrt(dx * dx + dy * dy);
+                var v = clamp(1 - dist / size, 0, 1);
+                if (dist > size * 0.65 && dist < size * 0.82) v = max(v, 0.6);
+                this.push(v);
+              }
+            }
+          },
+          {
+            name: "bloom",
+            icon: "✿",
+            cellSize: 8,
+            dark: ["#1a0b1a", "#4a1a4a", "#b85cb8", "#f0a0f0", "#ffe4ff"],
+            light: ["#fdf2f8", "#fbcfe8", "#f472b6", "#db2777", "#831843"],
+            accent: "#f0a0f0",
+            animation: {
+              css: "@keyframes rr-bloom{0%,100%{opacity:0.6;transform:scale(0.95)}50%{opacity:1;transform:scale(1.05)}}.rr-bloom{animation:rr-bloom 4s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
+              cellClass: function(v,x,y,cols,rows){return v>0.8?{"class":"rr-bloom",style:"animation-delay:"+(((x*3+y*2)%20)*0.2)+"s"}:null;}
+            },
+            fn: function (c, rand, cols, rows) {
+              var minDim = min(cols, rows);
+              var cx = cols / 2, cy = rows / 2;
+              var maxR = minDim * 0.45;
+              var nPoints = 60;
+              var points = [];
+              for (var i = 0; i < nPoints; i++) {
+                var theta = i * 137.5 * Math.PI / 180;
+                var rr = sqrt(i) / sqrt(nPoints) * maxR;
+                points.push({ x: cx + rr * cos(theta), y: cy + rr * sin(theta) });
+              }
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var minD2 = 1e9;
+                for (var i = 0; i < points.length; i++) {
+                  var dx = x - points[i].x, dy = y - points[i].y;
+                  var d2 = dx * dx + dy * dy;
+                  if (d2 < minD2) minD2 = d2;
+                }
+                var dist = sqrt(minD2);
+                this.push(clamp(1 - dist / (minDim * 0.035), 0, 1));
+              }
+            }
+          },
+          {
+            name: "burst",
+            icon: "✹",
+            cellSize: 14,
+            dark: ["#1a0f0a", "#7c2d12", "#ea580c", "#fbbf24", "#fff7ed"],
+            light: ["#fff7ed", "#fed7aa", "#f97316", "#c2410c", "#7c2d12"],
+            accent: "#fbbf24",
+            fn: function (c, rand, cols, rows) {
+              var cx = cols / 2, cy = rows / 2;
+              var rays = 14 + floor(rand() * 8);
+              var minDim = min(cols, rows);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var angle = atan2(y - cy, x - cx);
+                var dist = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) / minDim;
+                var rayVal = pow(abs(cos(angle * rays / 2)), 2.5);
+                var v = rayVal * clamp(1 - dist * 1.6, 0, 1);
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "waves",
+            icon: "〰",
+            cellSize: 12,
+            dark: ["#0f172a", "#1e40af", "#3b82f6", "#93c5fd", "#dbeafe"],
+            light: ["#eff6ff", "#bfdbfe", "#60a5fa", "#2563eb", "#1e3a8a"],
+            accent: "#3b82f6",
+            animation: {
+              css: "@keyframes rr-wave-shimmer{0%,100%{opacity:0.65}50%{opacity:1}}.rr-wave{animation:rr-wave-shimmer 3s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
+              cellClass: function(v,x,y,cols,rows){return v>0.72?{"class":"rr-wave",style:"animation-delay:"+((x*0.08)%3)+"s"}:null;}
+            },
+            fn: function (c, rand, cols, rows) {
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var w1 = sin(x * 0.08 + y * 0.04) * 0.5 + 0.5;
+                var w2 = sin(x * 0.04 - y * 0.06 + 1.5) * 0.3;
+                var w3 = sin(x * 0.13 + 2) * 0.15;
+                this.push(clamp(w1 + w2 + w3, 0, 1));
+              }
+            }
+          },
+          {
+            name: "chess",
+            icon: "▣",
+            cellSize: 20,
+            dark: ["#18181b", "#27272a", "#52525b", "#a1a1aa", "#f4f4f5"],
+            light: ["#ffffff", "#f4f4f5", "#d4d4d8", "#a1a1aa", "#52525b"],
+            accent: "#a1a1aa",
+            fn: function (c, rand, cols, rows) {
+              var s = 4;
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                this.push(((floor(x / s) + floor(y / s)) % 2) ? 0.6 : 0.08);
+              }
+            }
+          },
+          // ── new pixel-art themes ──
+          {
+            name: "sunset",
+            icon: "🌅",
+            cellSize: 22,
+            dark: ["#1a0a2e", "#4a1a6b", "#d9467c", "#f97316", "#fef08a"],
+            light: ["#fff7ed", "#fed7aa", "#fb923c", "#ea580c", "#7c2d12"],
+            accent: "#f97316",
+            fn: function (c, rand, cols, rows) {
+              var sunY = floor(rows * 0.42);
+              var sunX = floor(cols * 0.55);
+              var sunR = floor(min(cols, rows) * 0.12);
+              var waterY = floor(rows * 0.62);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var v = 0.05;
+                if (y < waterY) {
+                  var sky = 1 - (y / waterY) * 0.7;
+                  v = sky;
+                  var dx = x - sunX, dy = y - sunY;
+                  if (dx * dx + dy * dy < sunR * sunR) v = 0.95;
+                  else if (abs(dx) < sunR && abs(dy) < 2 && y > sunY) v = 0.85;
+                } else {
+                  var refl = (x + y) % 7 < 3 ? 0.45 : 0.25;
+                  v = refl * (0.6 + 0.4 * sin(x * 0.15));
+                }
+                var bird = (y === floor(rows * 0.28) && (x === floor(cols * 0.22) || x === floor(cols * 0.78))) ? 0.2 : 0;
+                v = max(v - bird, 0);
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "city",
+            icon: "🏙",
+            cellSize: 18,
+            dark: ["#020617", "#0f172a", "#334155", "#fbbf24", "#e2e8f0"],
+            light: ["#f8fafc", "#e2e8f0", "#94a3b8", "#f59e0b", "#475569"],
+            accent: "#fbbf24",
+            fn: function (c, rand, cols, rows) {
+              var buildings = [];
+              var bx = 0;
+              while (bx < cols) {
+                var bw = 3 + floor(rand() * 5);
+                var bh = floor(rows * (0.25 + rand() * 0.45));
+                buildings.push({ x: bx, w: bw, h: bh });
+                bx += bw + 1;
+              }
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var v = 0.05 + (y / rows) * 0.15;
+                for (var i = 0; i < buildings.length; i++) {
+                  var b = buildings[i];
+                  if (x >= b.x && x < b.x + b.w && y >= rows - b.h) {
+                    v = 0.25;
+                    if ((x - b.x) % 2 === 1 && (rows - y) % 3 === 1 && rand() > 0.35) v = 0.85;
+                  }
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+                    {
+            name: "underwater",
+            icon: "🐠",
+            cellSize: 20,
+            dark: ["#020a1a", "#061a33", "#0d3a66", "#176fa8", "#4fc3f7"],
+            light: ["#ecfeff", "#a5f3fc", "#22d3ee", "#0891b2", "#164e63"],
+            accent: "#22d3ee",
+            fn: function (c, rand, cols, rows) {
+              var schools = [];
+              for (var i = 0; i < 4; i++) schools.push({ y: rand() * rows, size: 3 + floor(rand() * 4), dir: rand() > 0.5 ? 1 : -1 });
+              var bubbles = makeSeeds(rand, cols, rows, 10);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var ny = y / rows;
+                var v = 0.04 + ny * 0.2;
+                  var ray = sin(x * 0.05 + y * 0.02) > 0.82 ? 0.22 : 0;
+                v = max(v, 0.04 + ray);
+                for (var i = 0; i < schools.length; i++) {
+                  var s = schools[i];
+                  var sy = s.y + sin(x * 0.03 + i) * 2;
+                  var schoolWidth = s.size * 3;
+                  var offset = (x % schoolWidth) / schoolWidth;
+                  if (abs(y - sy) < 1.5 && offset > 0.3 && offset < 0.7) v = 0.42;
+                }
+                for (var i = 0; i < bubbles.length; i++) {
+                  var b = bubbles[i];
+                  var r = 1 + (i % 2);
+                  var dx = x - b.x, dy = y - b.y;
+                  if (dx * dx + dy * dy < r * r) v = 0.82;
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "nebula",
+            icon: "🌌",
+            cellSize: 14,
+            dark: ["#0f0518", "#2d1b4e", "#7c3aed", "#c084fc", "#fae8ff"],
+            light: ["#faf5ff", "#e9d5ff", "#c084fc", "#9333ea", "#581c87"],
+            accent: "#c084fc",
+            fn: function (c, rand, cols, rows) {
+              var noise = makeNoise(rand);
+              var clouds = makeSeeds(rand, cols, rows, 8);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var n = noise(x * 0.05, y * 0.05);
+                var v = n * 0.35;
+                for (var i = 0; i < clouds.length; i++) {
+                  var cloud = clouds[i];
+                  var d2 = (x - cloud.x) * (x - cloud.x) + (y - cloud.y) * (y - cloud.y);
+                  var r = 5 + (i % 4) * 2;
+                  if (d2 < r * r) v = max(v, 0.45 + (1 - d2 / (r * r)) * 0.45);
+                }
+                if (rand() > 0.985) v = 0.95;
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+                    {
+            name: "sakura",
+            icon: "🌸",
+            cellSize: 18,
+            dark: ["#1a0d1a", "#3d1f3d", "#7c3d5c", "#c2789a", "#f0c2d6"],
+            light: ["#fdf2f8", "#fbcfe8", "#f9a8d4", "#db2777", "#9d174d"],
+            accent: "#f472b6",
+            fn: function (c, rand, cols, rows) {
+              var branches = [];
+              for (var i = 0; i < 4; i++) branches.push({ y: rand() * rows * 0.35, startX: rand() > 0.5 ? 0 : cols, dir: rand() > 0.5 ? 1 : -1 });
+              var petals = makeSeeds(rand, cols, rows, 18);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var ny = y / rows;
+                var v = 0.05 + ny * 0.1;
+                for (var i = 0; i < branches.length; i++) {
+                  var b = branches[i];
+                  var by = b.y + sin(x * 0.08 + i * 2) * 3;
+                  var onBranch = abs(y - by) < 1.2 && ((b.dir === 1 && x < cols * 0.55) || (b.dir === -1 && x > cols * 0.45));
+                  if (onBranch) v = 0.22;
+                  if (onBranch && rand() > 0.86) v = 0.84;
+                }
+                for (var i = 0; i < petals.length; i++) {
+                  var p = petals[i];
+                  var pdx = abs(x - p.x), pdy = abs(y - p.y);
+                  if (pdx + pdy < 1.4) v = 0.78 + rand() * 0.12;
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "desert",
+            icon: "🏜",
+            cellSize: 20,
+            dark: ["#281306", "#7c2d12", "#c2410c", "#fdba74", "#ffedd5"],
+            light: ["#fff7ed", "#fed7aa", "#fb923c", "#ea580c", "#9a3412"],
+            accent: "#fdba74",
+            fn: function (c, rand, cols, rows) {
+              var sunX = floor(cols * 0.75), sunY = floor(rows * 0.22), sunR = 3;
+              var cacti = [];
+              for (var i = 0; i < 3; i++) cacti.push({ x: rand() * cols, h: 6 + floor(rand() * 8) });
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var nx = x / cols, ny = y / rows;
+                var v = 0.06 + ny * 0.12;
+                var sdx = x - sunX, sdy = y - sunY;
+                if (sdx * sdx + sdy * sdy < sunR * sunR) v = 0.92;
+                var dune1 = sin(nx * 5 + 1) * 0.08;
+                var dune2 = sin(nx * 8 + 2) * 0.06;
+                var groundY = rows * (0.42 + dune1 + dune2);
+                if (y >= groundY) {
+                  var sand = 0.45 + ((y - groundY) / (rows - groundY)) * 0.3;
+                  var ridge = sin(nx * 12) * 0.04;
+                  if (y > groundY + ridge * rows) sand += 0.08;
+                  v = sand;
+                  for (var i = 0; i < cacti.length; i++) {
+                    var cac = cacti[i];
+                    var cy = rows - 1;
+                    var ch = cac.h;
+                    if (x >= cac.x - 1 && x <= cac.x + 1 && y > cy - ch && y <= cy) v = 0.18;
+                    var armY = cy - ch * 0.55;
+                    if (y >= armY - 1 && y <= armY + 1 && x >= cac.x - 3 && x <= cac.x - 1) v = 0.18;
+                    if (y >= armY && y <= cy - ch * 0.3 && x === floor(cac.x - 3)) v = 0.18;
+                  }
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "volcano",
+            icon: "🌋",
+            cellSize: 18,
+            dark: ["#0a0505", "#450a0a", "#b91c1c", "#f97316", "#fef08a"],
+            light: ["#fef2f2", "#fecaca", "#ef4444", "#c2410c", "#7f1d1d"],
+            accent: "#f97316",
+            fn: function (c, rand, cols, rows) {
+              var peakX = floor(cols / 2);
+              var peakY = floor(rows * 0.38);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var v = 0.06;
+                var slope = abs(x - peakX) / (cols * 0.5);
+                var mountainY = peakY + slope * rows * 0.55;
+                if (y > mountainY) {
+                  v = 0.3 + (y - mountainY) / (rows - mountainY) * 0.45;
+                }
+                // lava streams
+                if (abs(x - peakX) < 2 + (y - peakY) * 0.12 && y > peakY && y < rows * 0.92) {
+                  v = max(v, 0.7 + rand() * 0.25);
+                }
+                // lava at top
+                if (y >= peakY - 2 && y <= peakY + 1 && abs(x - peakX) < 4) v = 0.9;
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "arctic",
+            icon: "❄️",
+            cellSize: 16,
+            dark: ["#081016", "#0e7490", "#22d3ee", "#a5f3fc", "#ecfeff"],
+            light: ["#ecfeff", "#a5f3fc", "#22d3ee", "#0891b2", "#164e63"],
+            accent: "#22d3ee",
+            fn: function (c, rand, cols, rows) {
+              var flakes = makeSeeds(rand, cols, rows, 22);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var nx = x / cols, ny = y / rows;
+                var v = 0.05 + ny * 0.15 + sin(nx * 3 + ny * 2) * 0.04;
+                for (var i = 0; i < flakes.length; i++) {
+                  var f = flakes[i];
+                  var dx = abs(x - f.x), dy = abs(y - f.y);
+                  var size = 1.5 + (i % 3);
+                  var onArm = (dx < 0.8 || dy < 0.8 || abs(dx - dy) < 0.8);
+                  var dist = max(dx, dy);
+                  if (onArm && dist <= size) {
+                    v = 0.94 - dist * 0.14;
+                  }
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "candy",
+            icon: "🍬",
+            cellSize: 22,
+            dark: ["#2a0a1a", "#86198f", "#d946ef", "#f0abfc", "#fae8ff"],
+            light: ["#fdf4ff", "#f5d0fe", "#e879f9", "#c026d3", "#701a75"],
+            accent: "#f0abfc",
+fn: function (c, rand, cols, rows) {
+              var candies = makeSeeds(rand, cols, rows, 14);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var ny = y / rows;
+                var v = 0.06 + ny * 0.08;
+                var stripe = (floor((x + y) / 4) % 2 === 0) ? 0.16 : 0.06;
+                v = max(v, stripe);
+                for (var i = 0; i < candies.length; i++) {
+                  var cd = candies[i];
+                  var dx = abs(x - cd.x), dy = abs(y - cd.y);
+                  var r = 2.5;
+                  if (dx + dy < r) {
+                    v = 0.88;
+                    if ((floor(dx) + floor(dy)) % 2 === 0) v = 0.5;
+                    if (dx === 0 && dy > r * 0.4 && dy < r + 2) v = 0.32;
+                  }
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "cyber",
+            icon: "⚡",
+            cellSize: 14,
+            dark: ["#050510", "#1e1b4b", "#06b6d4", "#22d3ee", "#e0f2fe"],
+            light: ["#ecfeff", "#a5f3fc", "#06b6d4", "#0891b2", "#164e63"],
+            accent: "#06b6d4",
+            animation: {
+              css: "@keyframes rr-gridpulse{0%,100%{opacity:0.4}50%{opacity:1}}.rr-grid{animation:rr-gridpulse 1.8s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
+              cellClass: function(v,x,y,cols,rows){return v>0.75?{"class":"rr-grid",style:"animation-delay:"+(((x+y)%6)*0.3)+"s"}:null;}
+            },
+            fn: function (c, rand, cols, rows) {
+              var horizon = floor(rows * 0.5);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var v = 0.03;
+                if (y > horizon) {
+                  var rowUnit = (y - horizon) / (rows - horizon);
+                  var perspective = rowUnit * rowUnit;
+                  var centerX = cols / 2;
+                  var angle = atan2(y - horizon, x - centerX);
+                  var line = abs(sin(angle * 12)) < 0.08 + perspective * 0.1 ? 0.75 : 0;
+                  var scan = (y % max(2, floor(4 * (1 - perspective)))) === 0 ? 0.6 : 0;
+                  var glow = (y - horizon < 3) ? 0.5 : 0;
+                  v = max(line, scan, glow, 0.1 + perspective * 0.25);
+                } else {
+                  var b = floor((x * 7 + y * 13) % 17);
+                  if (y > horizon - b && rand() > 0.3) v = 0.35;
+                  if (rand() > 0.992) v = 0.9;
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "meadow",
+            icon: "🌼",
+            cellSize: 16,
+            dark: ["#052e16", "#14532d", "#16a34a", "#facc15", "#fef9c3"],
+            light: ["#f0fdf4", "#bbf7d0", "#4ade80", "#eab308", "#713f12"],
+            accent: "#facc15",
+fn: function (c, rand, cols, rows) {
+              var sunX = floor(cols * 0.82), sunY = floor(rows * 0.18), sunR = 3;
+              var flowers = makeSeeds(rand, cols, rows, 34);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var ny = y / rows;
+                var v = 0.1 + ny * 0.22;
+                var dx = x - sunX, dy = y - sunY;
+                if (dx * dx + dy * dy < sunR * sunR) v = 0.9;
+                if (ny > 0.45) {
+                  v = 0.22 + ((ny - 0.45) / 0.55) * 0.35;
+                  if ((x + floor(y * 1.5)) % 4 === 0) v += 0.06;
+                }
+                for (var i = 0; i < flowers.length; i++) {
+                  var f = flowers[i];
+                  if (f.y < rows * 0.45) continue;
+                  var fdx = abs(x - f.x), fdy = abs(y - f.y);
+                  if (fdx < 2 && fdy < 2) v = 0.85;
+                  if (fdx === 0 && fdy === 0) v = 0.32;
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "rain",
+            icon: "🌧",
+            cellSize: 14,
+            dark: ["#0f172a", "#1e293b", "#334155", "#60a5fa", "#dbeafe"],
+            light: ["#f8fafc", "#cbd5e1", "#94a3b8", "#3b82f6", "#1e3a8a"],
+            accent: "#60a5fa",
+            fn: function (c, rand, cols, rows) {
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var v = 0.08 + (y / rows) * 0.18;
+                // rain streaks
+                if ((x * 7 + y * 3) % 11 === 0 && rand() > 0.35) v = 0.82;
+                // clouds
+                if (y < rows * 0.25 && rand() > 0.8) v = 0.42;
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+                    {
+            name: "autumn",
+            icon: "🍁",
+            cellSize: 18,
+            dark: ["#1a0f0a", "#5c2613", "#8c4a1f", "#c1793d", "#e0a05a"],
+            light: ["#fff7ed", "#fde68a", "#fbbf70", "#d97706", "#7c2d12"],
+            accent: "#d97706",
+            animation: {
+              css: "@keyframes rr-fall{0%{transform:translate(0,0) rotate(-6deg);opacity:0.9}100%{transform:translate(40px,160px) rotate(6deg);opacity:0}}.rr-leaf{animation:rr-fall 6s linear infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
+              cellClass: function(v,x,y,cols,rows){return v>0.72?{"class":"rr-leaf",style:"animation-delay:"+(((x*3+y*5)%24)*0.25)+"s"}:null;}
+            },
+            fn: function (c, rand, cols, rows) {
+              var moonX = floor(cols * 0.82), moonY = floor(rows * 0.2), moonR = 3;
+              var trees = [];
+              for (var i = 0; i < 5; i++) trees.push({ x: rand() * cols, w: 2 + rand() * 2, h: rows * (0.25 + rand() * 0.35) });
+              var leaves = makeSeeds(rand, cols, rows, 26);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var ny = y / rows;
+                var v = 0.04 + ny * 0.16;
+                var dx = x - moonX, dy = y - moonY;
+                if (dx * dx + dy * dy < moonR * moonR) v = 0.85;
+                for (var i = 0; i < trees.length; i++) {
+                  var t = trees[i];
+                  if (x >= t.x - t.w && x <= t.x + t.w && y > rows - t.h) v = 0.12;
+                  var branchY = rows - t.h * 0.55;
+                  if (abs(y - branchY) < 1.5 && abs(x - t.x) < t.w + 3) v = 0.12;
+                }
+                for (var i = 0; i < leaves.length; i++) {
+                  var leaf = leaves[i];
+                  var ldx = abs(x - leaf.x), ldy = abs(y - leaf.y);
+                  if (ldx + ldy < 1.5) v = 0.82 + rand() * 0.12;
+                }
+                if (ny > 0.86 && rand() > 0.94) v = 0.72;
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "mushroom",
+            icon: "🍄",
+            cellSize: 18,
+            dark: ["#0f1f14", "#1a4028", "#b91c1c", "#f87171", "#fecaca"],
+            light: ["#f0fdf4", "#bbf7d0", "#fca5a5", "#dc2626", "#7f1d1d"],
+            accent: "#f87171",
+            fn: function (c, rand, cols, rows) {
+              var shrooms = [];
+              for (var i = 0; i < 6; i++) shrooms.push({ x: rand() * cols, s: 0.7 + rand() * 0.6 });
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var ny = y / rows;
+                var v = 0.08 + ny * 0.2;
+                if (ny > 0.55 && (x + y) % 5 === 0) v = 0.15;
+                for (var i = 0; i < shrooms.length; i++) {
+                  var s = shrooms[i];
+                  var scale = s.s;
+                  var stemH = floor(5 * scale), capW = floor(4 * scale);
+                  var ground = rows - 1;
+                  var sx = floor(s.x);
+                  if (x >= sx - 1 && x <= sx + 1 && y > ground - stemH && y <= ground) v = 0.55;
+                  var capY = ground - stemH;
+                  var dx = abs(x - sx);
+                  var capTop = capY - floor(3 * scale);
+                  if (y >= capTop && y <= capY && dx <= capW - (capY - y) * 0.6) v = 0.85;
+                  if (y >= capTop + 1 && y <= capY - 1 && dx % max(2, floor(2 * scale)) === 0 && dx < capW - 1) v = 0.3;
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "beach",
+            icon: "🏖",
+            cellSize: 20,
+            dark: ["#0c4a6e", "#075985", "#fde047", "#facc15", "#fef9c3"],
+            light: ["#ecfeff", "#7dd3fc", "#fde047", "#eab308", "#fefce8"],
+            accent: "#fde047",
+            fn: function (c, rand, cols, rows) {
+              var waterY = floor(rows * 0.52);
+              var sunX = floor(cols * 0.75), sunY = floor(rows * 0.18), sunR = 4;
+              var treeX = floor(cols * 0.22);
+              var beachY = floor(rows * 0.78);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var v;
+                if (y < waterY) {
+                  v = 0.18 + (y / waterY) * 0.18;
+                  var dx = x - sunX, dy = y - sunY;
+                  if (dx * dx + dy * dy < sunR * sunR) v = 0.92;
+                } else {
+                  var seaFrac = (y - waterY) / (rows - waterY);
+                  v = 0.35 + seaFrac * 0.2;
+                  var wave = sin(x * 0.15 + seaFrac * 5) > 0.6 ? 0.25 : 0;
+                  v += wave;
+                  if (seaFrac < 0.12) v += 0.15 * (1 - seaFrac / 0.12);
+                }
+                if (y > beachY) {
+                  v = 0.55 + ((y - beachY) / (rows - beachY)) * 0.25;
+                  if (x >= treeX - 1 && x <= treeX + 1 && y > beachY + 2 && y < beachY + 14) v = 0.18;
+                  if (y >= beachY - 2 && y <= beachY + 4 && abs(x - treeX) < 8 - abs(y - (beachY + 1)) * 1.2) v = 0.18;
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "space",
+            icon: "🪐",
+            cellSize: 18,
+            dark: ["#020617", "#0f172a", "#4f46e5", "#a5b4fc", "#e0e7ff"],
+            light: ["#eef2ff", "#c7d2fe", "#818cf8", "#4f46e5", "#312e81"],
+            accent: "#818cf8",
+            animation: {
+              css: "@keyframes rr-twinkle{0%,100%{opacity:0.25}50%{opacity:1}}.rr-star{animation:rr-twinkle 3s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
+              cellClass: function(v,x,y,cols,rows){return v>0.85?{"class":"rr-star",style:"animation-delay:"+(((x*4+y*7)%30)*0.1)+"s"}:null;}
+            },
+            fn: function (c, rand, cols, rows) {
+              var planets = [];
+              for (var i = 0; i < 4; i++) planets.push({ x: rand() * cols, y: rand() * rows, r: 3 + rand() * 5 });
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var v = 0.05;
+                for (var i = 0; i < planets.length; i++) {
+                  var p = planets[i];
+                  var dx = x - p.x, dy = y - p.y;
+                  var d = sqrt(dx * dx + dy * dy);
+                  if (d < p.r) v = 0.4 + (1 - d / p.r) * 0.45;
+                  // ring
+                  if (i === 0 && abs(d - p.r - 1.5) < 0.8 && abs(dx) > p.r * 0.3) v = 0.75;
+                }
+                if (rand() > 0.992) v = 0.95;
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "coral",
+            icon: "🪸",
+            cellSize: 14,
+            dark: ["#1a1025", "#701a75", "#ec4899", "#fb7185", "#fecdd3"],
+            light: ["#fff1f2", "#fecdd3", "#fb7185", "#e11d48", "#881337"],
+            accent: "#fb7185",
+            fn: function (c, rand, cols, rows) {
+              var corals = [];
+              for (var i = 0; i < 8; i++) corals.push({ x: rand() * cols, h: rows * (0.2 + rand() * 0.35), w: 1 + rand() * 2 });
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var ny = y / rows;
+                var v = 0.08 + ny * 0.25;
+                if (ny > 0.8) v = 0.4 + (ny - 0.8) * 1.5;
+                for (var i = 0; i < corals.length; i++) {
+                  var coral = corals[i];
+                  var h = coral.h;
+                  var baseY = rows - 1;
+                  var stemX = floor(coral.x);
+                  if (x >= stemX - coral.w && x <= stemX + coral.w && y > baseY - h && y <= baseY) v = 0.55;
+                  var nBranches = floor(h / 4);
+                  for (var b = 0; b < nBranches; b++) {
+                    var by = baseY - h + b * (h / nBranches) + 2;
+                    var dir = b % 2 === 0 ? -1 : 1;
+                    var bx = stemX + dir * (1 + b * 0.8);
+                    var len = 2 + b * 0.6;
+                    var dx = x - bx, dy = y - by;
+                    if (dx * dx + dy * dy < len * len && dx * dir > 0) v = 0.82;
+                  }
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+          {
+            name: "cabin",
+            icon: "🏕",
+            cellSize: 18,
+            dark: ["#0f172a", "#1e3a5f", "#78350f", "#b45309", "#fde68a"],
+            light: ["#f8fafc", "#bfdbfe", "#d97706", "#92400e", "#451a03"],
+            accent: "#d97706",
+            fn: function (c, rand, cols, rows) {
+              var cabinX = floor(cols * 0.4);
+              var groundY = floor(rows * 0.72);
+              var moonX = floor(cols * 0.82), moonY = floor(rows * 0.18), moonR = 3;
+              var trees = [];
+              for (var i = 0; i < 5; i++) trees.push({ x: rand() * cols, h: 8 + rand() * 10 });
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var ny = y / rows;
+                var v = 0.05 + ny * 0.12;
+                var dx = x - moonX, dy = y - moonY;
+                if (dx * dx + dy * dy < moonR * moonR) v = 0.9;
+                if (rand() > 0.99) v = 0.7;
+                if (y >= groundY) {
+                  v = 0.35 + ((y - groundY) / (rows - groundY)) * 0.25;
+                  for (var i = 0; i < trees.length; i++) {
+                    var t = trees[i];
+                    var tx = floor(t.x);
+                    var th = t.h;
+                    var ty = groundY;
+                    if (x >= tx - 1 && x <= tx + 1 && y > ty - th * 0.2 && y <= ty) v = 0.2;
+                    for (var lyr = 0; lyr < 3; lyr++) {
+                      var lyTop = ty - th * (0.2 + lyr * 0.25);
+                      var lyBot = ty - th * (lyr * 0.25);
+                      var lw = 4 - lyr;
+                      if (y >= lyTop && y <= lyBot && abs(x - tx) <= lw * (1 - (y - lyTop) / (lyBot - lyTop))) v = 0.15;
+                    }
+                  }
+                  var cw = 9, ch = 6;
+                  if (x >= cabinX && x < cabinX + cw && y >= groundY - ch && y < groundY) v = 0.32;
+                  if (y >= groundY - ch - 3 && y < groundY - ch) {
+                    var roofW = (cw / 2) + (groundY - ch - y);
+                    if (abs(x - (cabinX + cw / 2)) < roofW) v = 0.22;
+                  }
+                  if (x >= cabinX + 2 && x <= cabinX + 5 && y >= groundY - ch + 2 && y <= groundY - 1) v = 0.92;
+                  if (x >= cabinX + cw - 3 && x <= cabinX + cw - 1 && y >= groundY - ch + 1 && y < groundY) v = 0.25;
+                  if (x >= cabinX + 2 && x <= cabinX + 4 && y >= groundY - ch - 6 && y < groundY - ch - 3 && (x + y) % 3 === 0) v = 0.45;
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          },
+                    {
+            name: "disco",
+            icon: "🪩",
+            cellSize: 16,
+            dark: ["#0f0518", "#2d1b4e", "#7c3d95", "#c44fd8", "#f0abfc"],
+            light: ["#faf5ff", "#f5d0fe", "#e879f9", "#c026d3", "#701a75"],
+            accent: "#e879f9",
+            animation: {
+              css: "@keyframes rr-disco{0%,100%{opacity:0.5}50%{opacity:1}}.rr-disco{animation:rr-disco 2s ease-in-out infinite}@media (prefers-reduced-motion: reduce){*{animation:none!important}}",
+              cellClass: function(v,x,y,cols,rows){return v>0.65?{"class":"rr-disco",style:"animation-delay:"+(((x+y)%7)*0.28)+"s"}:null;}
+            },
+            fn: function (c, rand, cols, rows) {
+              var horizon = floor(rows * 0.58);
+              for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+                var v = 0.04;
+                if (y > horizon) {
+                  var rowUnit = (y - horizon) / (rows - horizon);
+                  var perspective = rowUnit * rowUnit;
+                  var tileW = max(2, floor(10 * (1 - perspective)));
+                  var tileX = floor(x / tileW + rowUnit * 4);
+                  var tileY = floor((y - horizon) / max(2, floor(4 * (1 - perspective))));
+                  var isLit = (tileX + tileY) % 4 === 0 && rand() > 0.35;
+                  v = isLit ? 0.7 + perspective * 0.2 : 0.1 + perspective * 0.12;
+                } else {
+                  var spotlight = sin(x * 0.04 + y * 0.02) > 0.85 ? 0.35 : 0;
+                  v = max(0.04 + (y / horizon) * 0.06, spotlight);
+                }
+                this.push(clamp(v, 0, 1));
+              }
+            }
+          }
+        ];
+
+        var WEIGHTS = [55, 18, 12, 9, 6];
+
+        function pickClass(v) {
+          var r2 = v * 100;
+          var acc = 0;
+          for (var i = 0; i < WEIGHTS.length; i++) { acc += WEIGHTS[i]; if (r2 < acc) return i; }
+          return 0;
+        }
+
+        function paletteStyle(theme) {
+          var pal = isLight() ? theme.light : theme.dark;
+          return "--cell-0:" + pal[0] + ";--cell-1:" + pal[1] + ";--cell-2:" + pal[2] + ";--cell-3:" + pal[3] + ";--cell-4:" + pal[4] + ";";
+        }
+
+        function applyThemeColors(theme) {
+          var base = theme.accent;
+          var main, dim, deep;
+          if (isLight()) {
+            main = shade(base, -0.25);
+            dim = shade(base, -0.4);
+            deep = shade(base, -0.55);
+          } else {
+            main = base;
+            dim = shade(base, -0.15);
+            deep = shade(base, -0.3);
+          }
+          var root = document.documentElement;
+          root.style.setProperty("--accent", main);
+          root.style.setProperty("--accent-dim", dim);
+          root.style.setProperty("--accent-deep", deep);
+          root.style.setProperty("--accent-glow", alpha(main, 0.35));
+        }
+
+        function computeCell(theme, vw, vh) {
+          var ref = min(vw, vh);
+          var scale = max(0.65, min(1.35, ref / 700));
+          return max(7, round(theme.cellSize * scale));
+        }
+
+        function fallbackGradient(rows, cols) {
+          var v = [];
+          for (var y = 0; y < rows; y++) {
+            for (var x = 0; x < cols; x++) {
+              v.push((1 - y / rows) * 0.5);
+            }
+          }
+          return v;
+        }
+
+        var currentArt = -1;
+
+        function renderSVG(values, cols, rows, cell, theme, isStatic) {
+          var w = cols * cell, h = rows * cell;
+          var parts = [];
+          var style = theme ? paletteStyle(theme) : "";
+          var anim = (!isStatic && theme && theme.animation) ? theme.animation : null;
+          parts.push('<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"',
+            ' viewBox="0 0 ', w, ' ', h,
+            '" preserveAspectRatio="xMidYMid slice" shape-rendering="crispEdges" style="', style, '">');
+          if (anim && anim.css) {
+            parts.push('<style>', anim.css, '</style>');
+          }
+          for (var y = 0; y < rows; y++) {
+            for (var x = 0; x < cols; x++) {
+              var v = values[y * cols + x];
+              var cls = pickClass(v);
+              var extra = anim && anim.cellClass ? anim.cellClass(v, x, y, cols, rows) : null;
+              var extraClass = extra ? extra.class : "";
+              var extraStyle = extra ? extra.style : "";
+              parts.push('<rect class="c', cls, extraClass ? ' ' + extraClass : '', '"',
+                extraStyle ? ' style="' + extraStyle + '"' : '',
+                ' x="', x * cell, '" y="', y * cell,
+                '" width="', cell, '" height="', cell, '"/>');
+            }
+          }
+          parts.push('</svg>');
+          return parts.join('');
+        }
+
+        function getRecentThemes() {
+          try {
+            var raw = localStorage.getItem("rr-art-history");
+            if (raw) {
+              var parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) return parsed;
+            }
+          } catch (e) {}
+          return [];
+        }
+
+        function saveRecentTheme(idx) {
+          try {
+            var history = getRecentThemes();
+            history.push(idx);
+            while (history.length > 8) history.shift();
+            localStorage.setItem("rr-art-history", JSON.stringify(history));
+          } catch (e) {}
+        }
+
+        function pickRandomTheme() {
+          var history = getRecentThemes();
+          var available = [];
+          for (var i = 0; i < THEMES.length; i++) {
+            if (history.indexOf(i) === -1) available.push(i);
+          }
+          if (available.length === 0) {
+            available = [];
+            for (var i = 0; i < THEMES.length; i++) available.push(i);
+          }
+          return available[floor(Math.random() * available.length)];
+        }
+
+        function generate(patternIndex) {
+          var old = document.getElementById("commit-grid");
+          if (old) old.remove();
+
+          var w = max(1, window.innerWidth);
+          var h = max(1, window.innerHeight);
+          var pi;
+          if (patternIndex === undefined || patternIndex === null || patternIndex < 0) {
+            pi = pickRandomTheme();
+            saveRecentTheme(pi);
+          } else {
+            pi = patternIndex;
+          }
+          if (pi >= THEMES.length) pi = 0;
+          currentArt = pi;
+
+          var theme = THEMES[pi];
+          applyThemeColors(theme);
+
+          var cell = computeCell(theme, w, h);
+          var cols = ceil(w / cell) + 1;
+          var rows = ceil(h / cell) + 1;
+          var values = [];
+          try {
+            var seed = floor(Math.random() * 2147483647);
+            var rand = mulberry32(seed);
+            theme.fn.call(values, null, rand, cols, rows);
+          } catch (err) {
+            values = fallbackGradient(rows, cols);
+          }
+          if (!values || values.length !== rows * cols) {
+            values = fallbackGradient(rows, cols);
+          }
+
+          var wrap = document.createElement("div");
+          wrap.innerHTML = renderSVG(values, cols, rows, cell, theme);
+          var svg = wrap.firstChild;
+          if (svg) {
+            svg.id = "commit-grid";
+            document.body.appendChild(svg);
+          }
+          updateArtPickerActive();
+        }
+
+        function generatePreview(patternIndex, size) {
+          size = size || 8;
+          var theme = THEMES[patternIndex];
+          var cell = max(6, floor(72 / size));
+          var values = [];
+          try {
+            var seed = patternIndex * 2654435761 + 42;
+            var rand = mulberry32(seed);
+            theme.fn.call(values, null, rand, size, size);
+          } catch (e) {
+            values = fallbackGradient(size, size);
+          }
+          return renderSVG(values, size, size, cell, theme, true);
+        }
+
+        function updateArtPickerActive() {
+          var opts = document.querySelectorAll(".art-option");
+          for (var i = 0; i < opts.length; i++) {
+            var idx = parseInt(opts[i].getAttribute("data-art"));
+            if (idx === currentArt) opts[i].classList.add("active");
+            else opts[i].classList.remove("active");
+          }
+        }
+
+        function buildArtPicker() {
+          var panel = document.getElementById("art-picker-panel");
+          if (!panel) return;
+          var html = '<button class="art-option art-random" data-art="-1"><div class="art-preview">⤮</div><span class="art-name">random</span></button>';
+          for (var i = 0; i < THEMES.length; i++) {
+            html += '<button class="art-option" data-art="' + i + '">';
+            html += '<div class="art-preview" data-art="' + i + '"></div>';
+            html += '<span class="art-name">' + THEMES[i].name + '</span>';
+            html += '</button>';
+          }
+          panel.innerHTML = html;
+          var previews = panel.querySelectorAll('.art-preview[data-art]');
+          for (var j = 0; j < previews.length; j++) {
+            var idx = parseInt(previews[j].getAttribute("data-art"));
+            previews[j].innerHTML = generatePreview(idx, 8);
+          }
+        }
+
+        function attachArtPickerHandlers() {
+          var btn = document.getElementById("art-picker-btn");
+          var panel = document.getElementById("art-picker-panel");
+          if (!btn || !panel) return;
+          function open() { panel.classList.add("open"); btn.setAttribute("aria-expanded", "true"); }
+          function close() { panel.classList.remove("open"); btn.setAttribute("aria-expanded", "false"); }
+          function toggle() { if (panel.classList.contains("open")) close(); else open(); }
+          btn.addEventListener("click", function (e) { e.stopPropagation(); toggle(); });
+          document.addEventListener("click", function (e) {
+            if (!panel.contains(e.target) && e.target !== btn) close();
+          });
+          document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+          panel.addEventListener("click", function (e) {
+            var opt = e.target.closest(".art-option");
+            if (!opt) return;
+            var idx = parseInt(opt.getAttribute("data-art"));
+            try { localStorage.setItem("rr-art", String(idx)); } catch (e2) {}
+            generate(idx);
+            close();
+          });
+        }
+
+        var savedArt = -1;
+        try {
+          var raw = localStorage.getItem("rr-art");
+          var p = parseInt(raw);
+          if (!isNaN(p) && p >= 0 && p < THEMES.length) savedArt = p;
+        } catch (e) {}
+
+        var resizeTimer = null;
+        function schedule() {
+          if (resizeTimer) clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(function () { generate(currentArt); }, 200);
+        }
+
+        function init() {
+          buildArtPicker();
+          attachArtPickerHandlers();
+          generate(savedArt);
+          window.addEventListener("resize", schedule);
+          window.addEventListener("themechange", function () {
+          buildArtPicker();
+          updateArtPickerActive();
+          generate(currentArt);
+        });
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init);
+        } else {
+          init();
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <main>
+      <nav>
+        <a href="/" class="logo">
+          <span class="logo-text">RepoRelay</span>
+        </a>
+        <div class="links">
+          <a href="/" class:list={[Astro.url.pathname === "/" ? "active" : ""]}>
+            <span class="nav-icon" aria-hidden="true">⌂</span>
+            <span class="nav-label">home</span>
+          </a>
+          <a href="/explore" class:list={[Astro.url.pathname === "/explore" ? "active" : ""]}>
+            <span class="nav-icon" aria-hidden="true">✦</span>
+            <span class="nav-label">explore</span>
+          </a>
+          <a href="https://github.com/ramsterr/RepoRELAY" target="_blank" rel="noopener" class="github-link">
+            <span class="nav-icon" aria-hidden="true">⚭</span>
+            <span class="nav-label">github</span>
+          </a>
+          <div class="art-picker">
+            <button id="art-picker-btn" class="art-picker-btn" type="button" aria-label="Change theme art" title="Change theme art" aria-expanded="false">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <rect x="0" y="0" width="4" height="4" rx="1"/>
+                <rect x="6" y="0" width="4" height="4" rx="1"/>
+                <rect x="12" y="0" width="4" height="4" rx="1"/>
+                <rect x="0" y="6" width="4" height="4" rx="1"/>
+                <rect x="6" y="6" width="4" height="4" rx="1"/>
+                <rect x="12" y="6" width="4" height="4" rx="1"/>
+                <rect x="0" y="12" width="4" height="4" rx="1"/>
+                <rect x="6" y="12" width="4" height="4" rx="1"/>
+                <rect x="12" y="12" width="4" height="4" rx="1"/>
+              </svg>
+            </button>
+            <div class="art-picker-panel" id="art-picker-panel" role="menu"></div>
+          </div>
+          <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle theme">
+            <span class="theme-icon" aria-hidden="true">☀</span>
+          </button>
+        </div>
+      </nav>
+      <slot />
+    </main>
+    <div class="grid-vignette" aria-hidden="true"></div>
+    <div class="noise-overlay" aria-hidden="true"></div>
+    <script is:inline>
+      (function () {
+        var btn = document.getElementById("theme-toggle");
+        if (!btn) return;
+        var icon = btn.querySelector(".theme-icon");
+        function refresh() {
+          var t = document.documentElement.getAttribute("data-theme") || "dark";
+          icon.textContent = t === "dark" ? "☀" : "☾";
+          btn.setAttribute("aria-label", t === "dark" ? "Switch to light theme" : "Switch to dark theme");
+        }
+        refresh();
+        btn.addEventListener("click", function () {
+          var current = document.documentElement.getAttribute("data-theme") || "dark";
+          var next = current === "dark" ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme", next);
+          try { localStorage.setItem("rr-theme", next); } catch (e) {}
+          refresh();
+          window.dispatchEvent(new CustomEvent("themechange"));
+        });
+      })();
+    </script>
+  </body>
+</html>

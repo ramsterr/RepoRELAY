@@ -4,20 +4,22 @@ version = "0.0.0"
 description = "RepoRelay monorepo root"
 requires-python = ">=3.12"
 readme = "README.md"
+dependencies = [
+    "cohere>=7.0.4",
+    "google-generativeai>=0.8.6",
+    "openai>=2.43.0",
+    "voyageai>=0.4.1",
+]
 
 [tool.uv.workspace]
 members = [
-    "apps/api",
-    "packages/core",
-    "packages/ingest",
-    "packages/engine",
+    "apps/mvp_api",
+    "packages/mvp",
 ]
 
 [tool.uv.sources]
-reporelay-core = { workspace = true }
-reporelay-api = { workspace = true }
-reporelay-ingest = { workspace = true }
-reporelay-engine = { workspace = true }
+reporelay-mvp = { workspace = true }
+reporelay-mvp-api = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -37,7 +39,10 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TID"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["reporelay_api", "reporelay_core", "reporelay_ingest", "reporelay_engine"]
+known-first-party = [
+    "reporelay_mvp",
+    "reporelay_mvp_api",
+]
 
 [tool.mypy]
 python_version = "3.12"

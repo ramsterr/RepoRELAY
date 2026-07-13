@@ -1,0 +1,35 @@
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_LINK_MODE=copy \
+    REPORE_LAY_LIGHTWEIGHT=1 \
+    EMBEDDING_API=openai \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    PYTHONMALLOC=malloc \
+    MALLOC_TRIM_THRESHOLD_=65536 \
+    PYTHONOPTIMIZE=2
+
+RUN pip install --no-cache-dir uv
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+COPY packages/mvp ./packages/mvp
+COPY apps/mvp_api ./apps/mvp_api
+
+# Install dependencies. --no-dev excludes test/lint tools.
+# The embedding is done via API (Gemini/Cohere/Voyage/OpenAI),
+# so we don't need the heavyweight sentence-transformers extra.
+RUN uv sync --frozen --no-dev
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+# OPENAI_API_KEY must be provided via Render env vars (sync: false in render.yaml).
+# In lightweight + openai mode, the model is NOT loaded — embedding is done via
+# the OpenAI API (text-embedding-3-small, dimensions=384) at ~$0.02/1M tokens.
+
+EXPOSE 8000
+
+CMD ["uv", "run", "--package", "reporelay-mvp-api", "uvicorn", "reporelay_mvp_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

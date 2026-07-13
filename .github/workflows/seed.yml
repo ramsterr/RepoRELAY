@@ -1,0 +1,31 @@
+name: seed
+
+on:
+  schedule:
+    # every 3 hours on the hour
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install deps
+        run: uv sync --frozen
+
+      - name: Run seeder
+        run: uv run --package reporelay-mvp reporelay-mvp seed --per-language 1000 --page-delay 2.0

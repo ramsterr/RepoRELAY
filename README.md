@@ -251,6 +251,23 @@ GitHub API ──► Postgres + pgvector + tsvector ──► Candidates ──�
 ├── pyproject.toml               # uv workspace
 └── justfile                     # task runner
 ```
+# why i made this site? and my thinking philosophy behind it 
+
+mostly the reason was personal use  , i actually like to explore a lot....also another reason was i felt that github explore feature was kind of blinding me from what i dont know ,
+
+for example you'd never search something like 'CRDTs (Conflict-free Replicated Data Types) ' unless you know it exists , or  someone told about it to you. 
+
+i actually use my own repo pretty regularly now , i would usually get a repo and paste its url here to see similar implementations of that thing.  So it helps me get better alternatives and somewhat similar to what im specifically looking for. 
+
+another reason was also that i would just paste some Free resource (can be movies,media ,news or other day to day stuff) and get more like them.
+so i use my repo to free load a lot of good stuff thanks to open-source legions.
+
+i belive that github is actually a treasure box which people dont seem to use it to its fullest...you can literally find anything for free on github that you'd have to pay otherwise.
+
+
+
+also i added multiple themes so that i dont get bored of the site , you can find a few of them below:
+
 
 # matrix
 <img width="2858" height="1800" alt="image" src="https://github.com/user-attachments/assets/3d4ebccb-db42-4f18-b1d2-6363ab25338a" />
